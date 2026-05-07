@@ -28,7 +28,7 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 
 3. Clone this repository (or copy mt5_multitf_pattern_scanner.py into a folder).
 
-5. Create a .env file in the same directory as the script, containing your MT5 login credentials:
+4. Create a .env file in the same directory as the script, containing your MT5 login credentials:
 .env
 
 MT5_PATH=C:\Program Files\Broker\terminal64.exe
@@ -41,7 +41,7 @@ MT5_SERVER=YourBrokerServer1
 
 
 
-6. Run the script (see usage below).
+5. Run the script (see usage below).
 
 Basic Usage
 Live Scanner (default)
