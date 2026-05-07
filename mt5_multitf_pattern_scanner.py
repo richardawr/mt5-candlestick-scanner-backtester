@@ -2410,18 +2410,6 @@ def run_scanner(cfg=None):
                         output = format_pattern_output(rates[-2], pats, cfg, stats, tf_label)
                         log_message(output, cfg)
 
-                        # Write alert file for signals with patterns
-                        if pats:
-                            try:
-                                _ts = rates[-2]['time']
-                                if isinstance(_ts, (int, float, np.integer, np.floating)):
-                                    _ts = datetime.fromtimestamp(int(_ts))
-                                fname = f"alert_{tf_label}_{_ts.strftime('%Y%m%d_%H%M%S')}.txt"
-                                with open(os.path.join(_LOG_DIR, fname), "w", encoding='utf-8') as f:
-                                    f.write(f"SIGNAL ALERT [{tf_label}] — {_ts}\n\n" + output)
-                            except Exception:
-                                pass
-
                         last_candle_time[tf_label] = bar_time
 
                 time.sleep(min(cfg.get('poll_interval_by_tf', {}).get(tf, 30) for tf in active_tfs))
