@@ -82,13 +82,23 @@ Configuration
 Most parameters can be changed via command‑line arguments:
 
 Argument	Description	Default
+
 --symbol	Trading symbol	EURUSD
+
 --atr	ATR period	14
+
 --sl	Stop loss multiplier (x ATR)	1.5
+
 --tp	Take profit multiplier (x ATR)	1.5
+
 --forward	Forward evaluation candles	15 for H4 (auto‑scaled per TF)
+
 --volume-filter	Enable volume confirmation	False
+
 --d1-trend-filter	Require trend on D1 to match pattern direction	False
+
 --account-balance	Account size for position sizing display	100000
+
 --risk-percent	Risk % of account per trade	1.0
+
 See --help for the full list.
