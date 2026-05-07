@@ -774,6 +774,11 @@ def load_latest_backtest_stats(output_dir=None, symbol=None, cfg=None):
 def _merge_multitf_stats(v6_stats, output_dir, symbol):
     """Merge v6 multi-TF stats into v5 flat structure for display compatibility."""
     stats = {'patterns': {}, 'sessions': {}, 'overall': {}, 'cross': {}, 'generated_at': v6_stats.get('generated_at', '')}
+    # Carry over per-TF overall stats from the v6 JSON for display
+    stats['timeframes'] = {}
+    for tf_label, tf_data in v6_stats.get('timeframes', {}).items():
+        if 'overall' in tf_data:
+            stats['timeframes'][tf_label] = tf_data['overall']
     # The v6 JSON only has per-TF overall stats, not pattern/session-level.
     # We need to parse the CSVs for detailed stats.
     pattern_csvs = sorted(
@@ -994,6 +999,15 @@ def print_top_setups(stats, cfg=None):
         owr = overall.get('win_rate', 0)
         owr_color = 'green' if owr >= min_wr else 'red'
         lines.append(f"  Overall: {C(owr_color, f'WR {owr:.1f}%')} | {overall.get('total_signals',0)} signals | Avg Max R: {overall.get('avg_max_r',0):.2f}R")
+    # Per-timeframe breakdown
+    tf_stats = stats.get('timeframes', {})
+    if tf_stats:
+        lines.append(f"  {'Timeframe':<12s} | {'WR':>6s} | {'Signals':>8s} | {'Avg Max R':>10s}")
+        lines.append(f"  {'-'*12} | {'-'*6} | {'-'*8} | {'-'*10}")
+        for tf_label, tf_overall in tf_stats.items():
+            twr = tf_overall.get('win_rate', 0)
+            tclr = 'green' if twr >= min_wr else ('yellow' if twr >= 45 else 'red')
+            lines.append(f"  {tf_label:<12s} | {C(tclr, f'{twr:>5.1f}%')} | {tf_overall.get('total_signals',0):>8d} | {tf_overall.get('avg_max_r',0):>9.2f}R")
     pat_list = []
     for pat, data in stats.get('patterns', {}).items():
         n = data.get('total', 0)
