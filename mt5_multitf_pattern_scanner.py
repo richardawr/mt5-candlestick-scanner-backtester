@@ -772,58 +772,112 @@ def load_latest_backtest_stats(output_dir=None, symbol=None, cfg=None):
 
 
 def _merge_multitf_stats(v6_stats, output_dir, symbol):
-    """Merge v6 multi-TF stats into v5 flat structure for display compatibility."""
-    stats = {'patterns': {}, 'sessions': {}, 'overall': {}, 'cross': {}, 'generated_at': v6_stats.get('generated_at', '')}
-    # Carry over per-TF overall stats from the v6 JSON for display
-    stats['timeframes'] = {}
+    """Merge v6 multi-TF stats into v5 flat structure for display compatibility.
+
+    Reads ALL per-TF CSVs (pattern_summary, session_summary, detections) and:
+      - Builds per-TF pattern stats in stats['patterns_tf']
+      - Properly merges across all TFs for overall pattern/session/cross stats
+      - Carries per-TF overall stats from the v6 JSON
+    """
+    tf_order = ['M5', 'M15', 'H1', 'H4', 'D1']
+    stats = {'patterns': {}, 'sessions': {}, 'overall': {}, 'cross': {},
+             'generated_at': v6_stats.get('generated_at', ''),
+             'patterns_tf': {tf: {} for tf in tf_order},
+             'timeframes': {}}
+    # Carry over per-TF overall stats from the v6 JSON
     for tf_label, tf_data in v6_stats.get('timeframes', {}).items():
         if 'overall' in tf_data:
             stats['timeframes'][tf_label] = tf_data['overall']
-    # The v6 JSON only has per-TF overall stats, not pattern/session-level.
-    # We need to parse the CSVs for detailed stats.
+
+    # ── Parse ALL pattern_summary CSVs ──
     pattern_csvs = sorted(
         glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_pattern_summary.csv")),
         reverse=True
     )
+    if pattern_csvs:
+        try:
+            all_dfs = [pd.read_csv(p) for p in pattern_csvs]
+            df_all = pd.concat(all_dfs, ignore_index=True)
+            # Per-TF pattern stats
+            for tf in tf_order:
+                tf_rows = df_all[df_all.get('Timeframe', pd.Series(dtype=str)) == tf]
+                if len(tf_rows) > 0:
+                    for _, row in tf_rows.iterrows():
+                        pat = row['Pattern']
+                        stats['patterns_tf'][tf][pat] = {
+                            'win_rate': round(float(row.get('Win_Rate_%', 0)), 1),
+                            'total': int(row.get('Total', 0)),
+                            'avg_max_r': round(float(row.get('Avg_Max_R', 0)), 2),
+                        }
+            # Merged across all TFs (weighted by signal count)
+            for pat in df_all['Pattern'].unique():
+                rows = df_all[df_all['Pattern'] == pat]
+                total_sig = int(rows['Total'].sum())
+                if total_sig > 0:
+                    total_wins = 0
+                    total_maxr_w = 0.0
+                    total_sl_w = 0.0
+                    total_tp_w = 0.0
+                    for _, r in rows.iterrows():
+                        n = int(r.get('Total', 0))
+                        if n > 0:
+                            total_wins += round(float(r.get('Win_Rate_%', 0)) * n / 100)
+                            total_maxr_w += float(r.get('Avg_Max_R', 0)) * n
+                            total_sl_w += float(r.get('SL_Hit_%', 0)) * n
+                            total_tp_w += float(r.get('TP_Hit_%', 0)) * n
+                    stats['patterns'][pat] = {
+                        'win_rate': round(total_wins / total_sig * 100, 1),
+                        'total': total_sig,
+                        'avg_max_r': round(total_maxr_w / total_sig, 2),
+                        'sl_hit_pct': round(total_sl_w / total_sig, 1),
+                        'tp_hit_pct': round(total_tp_w / total_sig, 1),
+                    }
+        except Exception:
+            pass
+
+    # ── Parse ALL session_summary CSVs ──
     session_csvs = sorted(
         glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_session_summary.csv")),
         reverse=True
     )
+    if session_csvs:
+        try:
+            all_dfs = [pd.read_csv(s) for s in session_csvs]
+            df_all = pd.concat(all_dfs, ignore_index=True)
+            for sess in df_all['Session'].unique():
+                rows = df_all[df_all['Session'] == sess]
+                total_sig = int(rows['Signals'].sum())
+                if total_sig > 0:
+                    total_wins = 0
+                    total_maxr_w = 0.0
+                    total_sl_w = 0.0
+                    total_tp_w = 0.0
+                    for _, r in rows.iterrows():
+                        n = int(r.get('Signals', 0))
+                        if n > 0:
+                            total_wins += round(float(r.get('Win_Rate_%', 0)) * n / 100)
+                            total_maxr_w += float(r.get('Avg_Max_R', 0)) * n
+                            total_sl_w += float(r.get('SL_Hit_%', 0)) * n
+                            total_tp_w += float(r.get('TP_Hit_%', 0)) * n
+                    stats['sessions'][sess] = {
+                        'win_rate': round(total_wins / total_sig * 100, 1),
+                        'signals': total_sig,
+                        'avg_max_r': round(total_maxr_w / total_sig, 2),
+                        'sl_hit_pct': round(total_sl_w / total_sig, 1),
+                        'tp_hit_pct': round(total_tp_w / total_sig, 1),
+                    }
+        except Exception:
+            pass
+
+    # ── Parse ALL detections CSVs for overall + cross stats ──
     det_csvs = sorted(
         glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_detections.csv")),
         reverse=True
     )
-    if pattern_csvs:
-        try:
-            df_p = pd.read_csv(pattern_csvs[0])
-            for _, row in df_p.iterrows():
-                pat = row['Pattern']
-                stats['patterns'][pat] = {
-                    'win_rate': round(float(row.get('Win_Rate_%', 0)), 1),
-                    'total': int(row.get('Total', 0)),
-                    'avg_max_r': round(float(row.get('Avg_Max_R', 0)), 2),
-                    'sl_hit_pct': round(float(row.get('SL_Hit_%', 0)), 1),
-                    'tp_hit_pct': round(float(row.get('TP_Hit_%', 0)), 1),
-                }
-        except Exception:
-            pass
-    if session_csvs:
-        try:
-            df_s = pd.read_csv(session_csvs[0])
-            for _, row in df_s.iterrows():
-                sess = row['Session']
-                stats['sessions'][sess] = {
-                    'win_rate': round(float(row.get('Win_Rate_%', 0)), 1),
-                    'signals': int(row.get('Signals', 0)),
-                    'avg_max_r': round(float(row.get('Avg_Max_R', 0)), 2),
-                    'sl_hit_pct': round(float(row.get('SL_Hit_%', 0)), 1),
-                    'tp_hit_pct': round(float(row.get('TP_Hit_%', 0)), 1),
-                }
-        except Exception:
-            pass
     if det_csvs:
         try:
-            df_d = pd.read_csv(det_csvs[0])
+            all_dfs = [pd.read_csv(d) for d in det_csvs]
+            df_d = pd.concat(all_dfs, ignore_index=True)
             directional = df_d[df_d['Direction'] != 'Neutral']
             if len(directional) > 0:
                 s = int((directional['Prediction_Success'] == True).sum())
@@ -1009,6 +1063,7 @@ def print_top_setups(stats, cfg=None):
             tclr = 'green' if twr >= min_wr else ('yellow' if twr >= 45 else 'red')
             lines.append(f"  {tf_label:<12s} | {C(tclr, f'{twr:>5.1f}%')} | {tf_overall.get('total_signals',0):>8d} | {tf_overall.get('avg_max_r',0):>9.2f}R")
     pat_list = []
+    patterns_tf = stats.get('patterns_tf', {})
     for pat, data in stats.get('patterns', {}).items():
         n = data.get('total', 0)
         wr = data.get('win_rate', 0)
@@ -1017,16 +1072,39 @@ def print_top_setups(stats, cfg=None):
             confidence = min(1.0, n / 30.0)
             weighted = wr * confidence + min(amr, 2.0) * 10
             tier_letter, tier_label, tier_clr = compute_pattern_tier(pat, stats, cfg)
-            pat_list.append((pat, wr, n, amr, weighted, tier_letter, tier_label, tier_clr))
+            # Find best TF for this pattern
+            best_tf, best_tf_wr = '', 0
+            tf_wrs = {}
+            for tf in ['M5', 'M15', 'H1', 'H4', 'D1']:
+                if pat in patterns_tf.get(tf, {}):
+                    tf_wr = patterns_tf[tf][pat].get('win_rate', 0)
+                    tf_n = patterns_tf[tf][pat].get('total', 0)
+                    tf_wrs[tf] = (tf_wr, tf_n) if tf_n >= min_sig else (None, tf_n)
+                    if tf_n >= min_sig and tf_wr > best_tf_wr:
+                        best_tf_wr = tf_wr
+                        best_tf = tf
+                else:
+                    tf_wrs[tf] = (None, 0)
+            pat_list.append((pat, wr, n, amr, weighted, tier_letter, tier_label, tier_clr, best_tf, tf_wrs))
     pat_list.sort(key=lambda x: x[4], reverse=True)
+    tf_cols = ['M5', 'M15', 'H1', 'H4', 'D1']
     if pat_list:
         lines.append("")
-        lines.append(f"  {'Pattern':<30s} | {'Tier':>5s} | {'WR':>6s} | {'Sig':>5s} | {'MaxR':>5s} | {'Edge':>5s}")
-        lines.append(f"  {'-'*30} | {'-'*5} | {'-'*6} | {'-'*5} | {'-'*5} | {'-'*5}")
-        for pat, wr, n, amr, weighted, tl, tlab, tc in pat_list[:7]:
+        lines.append(f"  {'Pattern':<28s} | {'Tier':>14s} | {'M5':>5s} | {'M15':>5s} | {'H1':>5s} | {'H4':>5s} | {'D1':>5s} | {'Sig':>6s} | {'Edge':>5s}")
+        lines.append(f"  {'-'*28} | {'-'*14} | {'-'*5} | {'-'*5} | {'-'*5} | {'-'*5} | {'-'*5} | {'-'*6} | {'-'*5}")
+        for pat, wr, n, amr, weighted, tl, tlab, tc, best_tf, tf_wrs in pat_list[:7]:
             edge_tag = "HIGH" if wr >= min_wr else "LOW"
             edge_color = 'green' if wr >= min_wr else 'red'
-            lines.append(f"  {pat:<30s} | {C(tc, f'{tl}:{tlab}'):>14s} | {C(edge_color, f'{wr:>5.1f}%')} | {n:>5d} | {amr:>4.2f}R | {C(edge_color, f'{edge_tag:>5s}')}")
+            tf_cells = []
+            for tf in tf_cols:
+                tf_wr, tf_n = tf_wrs.get(tf, (None, 0))
+                if tf_wr is not None:
+                    clr = 'green' if tf_wr >= min_wr else ('yellow' if tf_wr >= 45 else 'red')
+                    tf_cells.append(C(clr, f'{tf_wr:>4.1f}%'))
+                else:
+                    tf_cells.append(f"  {'--' if tf_n < min_sig else '':>4s} ")
+            tf_str = ' | '.join(tf_cells)
+            lines.append(f"  {pat:<28s} | {C(tc, f'{tl}:{tlab}'):>14s} | {tf_str} | {n:>6d} | {C(edge_color, f'{edge_tag:>5s}')}")
     all_sess = [(s, d) for s, d in stats.get('sessions', {}).items()
                 if d.get('signals', 0) >= min_sig]
     if all_sess:
