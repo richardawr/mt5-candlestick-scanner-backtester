@@ -244,9 +244,23 @@ PATTERN_PRIORITY = {
 # UTILITY FUNCTIONS
 # ============================================================
 
+def broker_now():
+    """Return current broker server time. MT5 timestamps interpreted as UTC = broker time."""
+    return datetime.utcnow()
+
+
+def broker_time(ts):
+    """Convert a Unix timestamp (from MT5) to broker server time.
+
+    MT5 brokers encode their server time directly in the timestamps,
+    so datetime.utcfromtimestamp() returns the broker's clock time.
+    """
+    return datetime.utcfromtimestamp(int(ts))
+
+
 def log_message(msg, cfg=None):
     """Print and log a message. Strips ANSI colour codes for log file."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = broker_now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{timestamp}] {msg}"
     print(line)
     clean_line = re.sub(r'\x1b\[[0-9;]*m', '', line)
@@ -1224,7 +1238,7 @@ def scan_patterns(rates, cfg=None, d1_rates=None, tf_label='H4', htf_atr_rates=N
 
     _ct = curr['time']
     if isinstance(_ct, (int, float, np.integer, np.floating)):
-        hour = datetime.fromtimestamp(int(_ct)).hour
+        hour = broker_time(int(_ct)).hour
     elif hasattr(_ct, 'hour'):
         hour = _ct.hour
     else:
@@ -1348,7 +1362,7 @@ def format_pattern_output(candle, patterns, cfg=None, stats=None, tf_label='H4')
     if stats is None: stats = {}
     ct = candle['time']
     if isinstance(ct, (int, float, np.integer, np.floating)):
-        ct = datetime.fromtimestamp(int(ct))
+        ct = broker_time(int(ct))
     time_str = ct.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ct, 'strftime') else str(ct)
     bt = max(candle['open'], candle['close'])
     bb = min(candle['open'], candle['close'])
@@ -2387,7 +2401,7 @@ def run_scanner(cfg=None):
 
                     bar_time = rates[-1]['time']
                     if isinstance(bar_time, (int, float, np.integer, np.floating)):
-                        bar_time = datetime.fromtimestamp(int(bar_time))
+                        bar_time = broker_time(int(bar_time))
 
                     if last_candle_time[tf_label] is None:
                         last_candle_time[tf_label] = bar_time
@@ -2539,7 +2553,7 @@ def run_quick_backtest(num_bars=500, cfg=None):
                     pattern_counts[p['name']] = pattern_counts.get(p['name'], 0) + 1
                     ct = candle['time']
                     if isinstance(ct, (int, float, np.integer, np.floating)):
-                        ct = datetime.fromtimestamp(ct)
+                        ct = broker_time(int(ct))
                     all_detections.append({
                         'Timeframe': tf_label,
                         'DateTime': ct, 'Pattern': p['name'],
