@@ -22,6 +22,7 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 - **Session classification** (Asia, Pacific, London Open, London Morning, London/NY Overlap, NY Afternoon)
 - **Full backtests** over date ranges — CSV reports, summary tables, JSON stats cache, and text reports
 - **Live scanner** — monitors all active timeframes and prints formatted alerts when a new candle closes
+- **Sound alerts** (Windows only) — high-Hz triple beep for STRONG BUY, low-Hz triple beep for STRONG SELL; starts muted, type `m` + Enter to toggle
 - **Position sizing** (risk-based, standard lots) displayed in alerts
 - **Auto-reconnect** with exponential backoff if MT5 connection drops
 
@@ -82,6 +83,8 @@ Then it monitors all timeframes and alerts on every new candle close when a patt
 - Historical edge breakdown (pattern WR, session WR, cross-stat WR, signal score)
 - Risk-based position sizing
 
+Sound alerts start **muted** by default. Type `m` + Enter in the terminal to unmute and hear audio alerts for strong signals. See [Sound Alerts](#sound-alerts) for details.
+
 Press `Ctrl+C` to stop.
 
 ---
@@ -130,6 +133,61 @@ Scan the latest closed candle on all active timeframes and exit.
 
 python mt5_multitf_pattern_scanner.py --mode scan
 
+### Test Sound Alerts
+
+Play both the STRONG BUY and STRONG SELL test beeps to verify audio is working, then exit.
+
+python mt5_multitf_pattern_scanner.py --test-sound
+
+---
+
+## Sound Alerts
+
+The scanner includes Windows-only sound alerts so you don't have to stare at the screen waiting for strong signals.
+
+### How it works
+
+- **STRONG BUY** (Bullish signal with score >= 65) — triple high-Hz beep (1200 Hz by default)
+- **STRONG SELL** (Bearish signal with score >= 65) — triple low-Hz beep (400 Hz by default)
+- The scanner starts **muted** — you must explicitly unmute to hear alerts
+- Type `m` + Enter in the terminal to toggle mute/unmute at any time
+- The keyboard listener runs in a background thread, so there is no delay — it responds instantly
+
+### Startup message
+
+When the live scanner starts with sound enabled, you will see:
+
+Sound Alerts: ENABLED | Buy: 1200Hz | Sell: 400Hz | Threshold: 65
+Sound is MUTED — Type "m" + Enter to unmute
+
+### Toggling mute
+
+Type `m` and press Enter at any time while the scanner is running:
+
+Sound UNMUTED  |  Type 'm' + Enter to toggle
+Sound MUTED    |  Type 'm' + Enter to toggle
+
+### Testing sound
+
+Before relying on alerts, verify your audio works:
+
+python mt5_multitf_pattern_scanner.py --test-sound
+
+This temporarily unmutes, plays both test beeps, then restores the muted state.
+
+### Sound configuration
+
+These settings are in the `CFG` dict at the top of the script (not exposed as CLI args):
+
+| Key | Default | Description |
+|---|---|---|
+| `sound_enabled` | `True` | Master switch — set `False` to disable all sound |
+| `sound_buy_hz` | `1200` | Frequency in Hz for STRONG BUY triple beep |
+| `sound_sell_hz` | `400` | Frequency in Hz for STRONG SELL triple beep |
+| `sound_beep_duration` | `150` | Duration of each individual beep in milliseconds |
+| `sound_beep_pause` | `100` | Pause between beeps in milliseconds |
+| `sound_strong_threshold` | `65.0` | Signal score must be >= this to trigger a sound alert |
+
 ---
 
 ## How Backtest Stats Flow Into the Live Scanner
@@ -169,6 +227,7 @@ python mt5_multitf_pattern_scanner.py --mode scan
 | `--risk-percent` | Risk % of account per trade | `1.0` |
 | `--min-signal-score` | Minimum signal score to display (0-100) | `0` |
 | `--alert-only-strong` | Only alert on strong signals | `False` |
+| `--test-sound` | Play STRONG BUY and STRONG SELL test beeps, then exit | |
 | `--output` | Backtest output directory | `./backtest_results` |
 
 ### Pattern Thresholds
