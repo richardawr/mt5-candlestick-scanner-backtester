@@ -10,6 +10,11 @@ Credentials are loaded exclusively from the .env file in the same directory.
 
 Install: pip install MetaTrader5 pandas numpy colorama python-dotenv
 
+Sound Alerts (Windows only):
+    - High-Hz triple beep for STRONG BUY signals (score >= 65)
+    - Low-Hz triple beep for STRONG SELL signals (score >= 65)
+    - Type 'm' + Enter at any time to mute/unmute sound alerts
+
 Usage:
     # Live scanner — all 5 timeframes (default)
     python mt5_multitf_pattern_scanner_v6.py
@@ -35,6 +40,9 @@ Usage:
 
     # Live scanner with custom account sizing
     python mt5_multitf_pattern_scanner_v6.py --mode live --account-balance 25000 --risk-percent 0.5
+
+    # Test sound alerts (plays both BUY and SELL test beeps)
+    python mt5_multitf_pattern_scanner_v6.py --test-sound
 """
 
 import MetaTrader5 as mt5
@@ -50,6 +58,20 @@ import glob
 import re
 import warnings
 warnings.filterwarnings('ignore')
+
+# ── Windows sound & keyboard support ────────────────────────────────
+try:
+    import winsound
+    _WINSOUND = True
+except ImportError:
+    _WINSOUND = False
+
+import threading
+
+# Global mute state for sound alerts (toggled by 'm' key)
+# Starts MUTED — type 'm' + Enter to unmute and hear alerts
+_sound_muted = True
+_sound_listener_thread = None
 
 # ── Load credentials from .env file (REQUIRED) ─────────────────────
 try:
@@ -217,6 +239,14 @@ CFG = {
     # ── Position Sizing ────────────────────────────────────────────
     'account_balance':       100000,
     'risk_percent':          1.0,    # % of account per trade
+
+    # ── Sound Alerts (Windows only) ─────────────────────────────────
+    'sound_enabled':         True,   # master switch for sound alerts
+    'sound_buy_hz':          1200,   # Hz for strong buy triple beep
+    'sound_sell_hz':         400,    # Hz for strong sell triple beep
+    'sound_beep_duration':   150,    # ms per individual beep
+    'sound_beep_pause':      100,    # ms pause between beeps
+    'sound_strong_threshold': 65.0,  # signal score >= this = STRONG
 }
 
 # ── Derived Paths ───────────────────────────────────────────────────
@@ -243,6 +273,164 @@ PATTERN_PRIORITY = {
 # ============================================================
 # UTILITY FUNCTIONS
 # ============================================================
+
+# ============================================================
+# SOUND ALERT FUNCTIONS
+# ============================================================
+
+def play_signal_beep(direction, score, cfg=None):
+    """Play a triple beep sound alert for strong signals.
+
+    High-Hz triple beep for STRONG BUY, Low-Hz triple beep for STRONG SELL.
+    Respects the global mute state and configuration thresholds.
+
+    Args:
+        direction: 'Bullish' or 'Bearish'
+        score: signal quality score (0-100)
+        cfg: configuration dict
+    """
+    global _sound_muted
+    if cfg is None:
+        cfg = CFG
+
+    # Check master switch and mute state
+    if not cfg.get('sound_enabled', True) or _sound_muted:
+        return
+    if not _WINSOUND:
+        return
+
+    # Only beep for STRONG signals (score >= threshold)
+    threshold = cfg.get('sound_strong_threshold', 65.0)
+    if score is None or score < threshold:
+        return
+
+    # Determine frequency based on direction
+    if direction == 'Bullish':
+        freq = cfg.get('sound_buy_hz', 1200)
+    elif direction == 'Bearish':
+        freq = cfg.get('sound_sell_hz', 400)
+    else:
+        return  # Neutral signals don't beep
+
+    duration = cfg.get('sound_beep_duration', 150)
+    pause = cfg.get('sound_beep_pause', 100)
+
+    # Play triple beep
+    try:
+        for i in range(3):
+            winsound.Beep(int(freq), int(duration))
+            if i < 2:  # No pause after last beep
+                time.sleep(pause / 1000.0)
+    except Exception:
+        pass  # Silently ignore sound errors
+
+
+def _sound_key_listener():
+    """Background daemon thread that listens for 'm' + Enter to toggle mute.
+
+    Uses input() which works in ALL terminals including PyCharm.
+    Runs as a daemon thread so it dies automatically when the main program exits.
+    """
+    global _sound_muted
+    while True:
+        try:
+            cmd = input().strip().lower()
+            if cmd == 'm':
+                _sound_muted = not _sound_muted
+                status = C('red', 'MUTED') if _sound_muted else C('green', 'UNMUTED')
+                print(f"\n  Sound {status}  |  Type 'm' + Enter to toggle")
+        except (EOFError, KeyboardInterrupt):
+            break
+        except Exception:
+            pass
+
+
+def start_sound_key_listener():
+    """Start the background keyboard listener thread (if not already running)."""
+    global _sound_listener_thread
+    if _sound_listener_thread is not None and _sound_listener_thread.is_alive():
+        return
+    _sound_listener_thread = threading.Thread(target=_sound_key_listener, daemon=True)
+    _sound_listener_thread.start()
+
+
+def check_mute_key():
+    """Legacy stub — keyboard is now handled by background thread.
+
+    Kept for API compatibility but does nothing. The background thread
+    started by start_sound_key_listener() handles all key detection.
+    """
+    pass
+
+
+def test_sound(cfg=None):
+    """Play test beeps for STRONG BUY and STRONG SELL so the user can verify audio.
+
+    Temporarily forces sound enabled and unmuted for the test, then restores
+    the original state. Exits after playing both test beeps.
+    """
+    global _sound_muted
+    if cfg is None:
+        cfg = CFG
+
+    if not _WINSOUND:
+        print(C('red', "ERROR: winsound not available — sound requires Windows"))
+        return
+
+    # Save original mute state, force unmute for the test
+    was_muted = _sound_muted
+    _sound_muted = False
+
+    buy_hz = cfg.get('sound_buy_hz', 1200)
+    sell_hz = cfg.get('sound_sell_hz', 400)
+    duration = cfg.get('sound_beep_duration', 150)
+    pause = cfg.get('sound_beep_pause', 100)
+
+    print("")
+    print(C('cyan', "=" * 50))
+    print(C('bold', "  SOUND TEST"))
+    print(C('cyan', "=" * 50))
+    print(f"  STRONG BUY beep:  {buy_hz} Hz x 3")
+    print(f"  STRONG SELL beep: {sell_hz} Hz x 3")
+    print(f"  Beep duration:    {duration} ms")
+    print(f"  Pause between:    {pause} ms")
+    print("")
+
+    # Test STRONG BUY
+    print(C('green', "  >>> Playing STRONG BUY test beep..."))
+    try:
+        for i in range(3):
+            winsound.Beep(int(buy_hz), int(duration))
+            if i < 2:
+                time.sleep(pause / 1000.0)
+    except Exception as e:
+        print(C('red', f"  ERROR: {e}"))
+
+    time.sleep(0.5)
+
+    # Test STRONG SELL
+    print(C('red', "  >>> Playing STRONG SELL test beep..."))
+    try:
+        for i in range(3):
+            winsound.Beep(int(sell_hz), int(duration))
+            if i < 2:
+                time.sleep(pause / 1000.0)
+    except Exception as e:
+        print(C('red', f"  ERROR: {e}"))
+
+    # Restore original mute state
+    _sound_muted = was_muted
+
+    print("")
+    print(C('cyan', "=" * 50))
+    if was_muted:
+        print(f"  Sound is {C('red', 'MUTED')} (restored to original state)")
+        print(f"  Type {C('yellow', '\"m\" + Enter')} to unmute during live scanner")
+    else:
+        print(f"  Sound is {C('green', 'UNMUTED')} (restored to original state)")
+    print(C('cyan', "=" * 50))
+    print("")
+
 
 def broker_now():
     """Return current broker server time. MT5 timestamps interpreted as UTC = broker time."""
@@ -2341,6 +2529,20 @@ def run_scanner(cfg=None):
     if cfg.get('volume_filter', False):
         log_message(f"Volume Filter: {C('green', 'ENABLED')} ({cfg['volume_threshold']}x avg)", cfg)
 
+    # Sound alert status
+    if cfg.get('sound_enabled', True) and _WINSOUND:
+        buy_hz = cfg.get('sound_buy_hz', 1200)
+        sell_hz = cfg.get('sound_sell_hz', 400)
+        threshold = cfg.get('sound_strong_threshold', 65.0)
+        log_message(f"Sound Alerts: {C('green', 'ENABLED')} | Buy: {buy_hz}Hz | Sell: {sell_hz}Hz | Threshold: {threshold:.0f}", cfg)
+        log_message(f"Sound is {C('red', 'MUTED')} — Type {C('yellow', '\"m\" + Enter')} to unmute", cfg)
+    elif not _WINSOUND:
+        log_message(C('yellow', "Sound Alerts: DISABLED (winsound not available — Windows only)"), cfg)
+
+    # Start background keyboard listener for mute toggle
+    if cfg.get('sound_enabled', True) and _WINSOUND:
+        start_sound_key_listener()
+
     # Load backtest stats for historical edge display
     stats = load_latest_backtest_stats(cfg=cfg)
     stats_last_refresh = datetime.now()
@@ -2410,6 +2612,13 @@ def run_scanner(cfg=None):
                             pats = scan_patterns(list(rates[:-1]), cfg, d1_rates_cache, tf_label, htf_atr_rates)
                             pats = apply_signal_score_filter(pats, stats, cfg)
                             log_message(format_pattern_output(rates[-2], pats, cfg, stats, tf_label), cfg)
+                            # Play sound alert for strong signals on startup scan
+                            for pat in pats:
+                                if pat.get('direction') in ('Bullish', 'Bearish'):
+                                    score = pat.get('signal_score')
+                                    if score is None:
+                                        score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg)
+                                    play_signal_beep(pat['direction'], score, cfg)
                         continue
 
                     if bar_time != last_candle_time[tf_label]:
@@ -2424,8 +2633,17 @@ def run_scanner(cfg=None):
                         output = format_pattern_output(rates[-2], pats, cfg, stats, tf_label)
                         log_message(output, cfg)
 
+                        # Play sound alert for strong directional signals
+                        for pat in pats:
+                            if pat.get('direction') in ('Bullish', 'Bearish'):
+                                score = pat.get('signal_score')
+                                if score is None:
+                                    score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg)
+                                play_signal_beep(pat['direction'], score, cfg)
+
                         last_candle_time[tf_label] = bar_time
 
+                # Keyboard listener runs in background thread — no manual check needed
                 time.sleep(min(cfg.get('poll_interval_by_tf', {}).get(tf, 30) for tf in active_tfs))
 
             except Exception as e:
@@ -2496,6 +2714,14 @@ def run_single_scan(cfg=None):
         pats     = scan_patterns(scan_src, cfg, d1_rates, tf_label, htf_atr_rates)
         pats     = apply_signal_score_filter(pats, stats, cfg)
         log_message(format_pattern_output(closed, pats, cfg, stats, tf_label), cfg)
+
+        # Play sound alert for strong directional signals
+        for pat in pats:
+            if pat.get('direction') in ('Bullish', 'Bearish'):
+                score = pat.get('signal_score')
+                if score is None:
+                    score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg)
+                play_signal_beep(pat['direction'], score, cfg)
 
     try: mt5.shutdown()
     except Exception: pass
@@ -2895,6 +3121,8 @@ Examples:
     # Misc
     p.add_argument("--warmup-bars",    type=int, default=cfg['warmup_bars'])
     p.add_argument("--bars-to-fetch",  type=int, default=cfg['bars_to_fetch'])
+    p.add_argument("--test-sound",     action="store_true",
+                   help="Play test beeps (STRONG BUY then STRONG SELL) and exit")
 
     p.set_defaults(
         deduplicate_signals=cfg['deduplicate_signals'],
@@ -2950,6 +3178,11 @@ def main():
             sys.exit(1)
         # Override the per-TF mapping to use the specified TF for all
         runtime_cfg['atr_tf_by_tf'] = {tf: override_tf for tf in TIMEFRAME_MAP.keys()}
+
+    # Handle --test-sound: play both test beeps and exit
+    if args.test_sound:
+        test_sound(runtime_cfg)
+        return
 
     if args.mode == 'live':
         run_scanner(runtime_cfg)
