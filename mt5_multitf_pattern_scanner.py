@@ -841,19 +841,29 @@ def mt5_rates_to_df(rates, cfg=None):
     if rates is None or len(rates) == 0:
         return pd.DataFrame()
 
-    # Build DataFrame from structured array
+    # Build DataFrame from structured array (or list of numpy.void)
+    # Detect available field names (numpy.void supports [] but not .get())
+    first = rates[0]
+    field_names = first.dtype.names if hasattr(first, 'dtype') and hasattr(first.dtype, 'names') else None
     rows = []
     for r in rates:
-        rows.append({
+        row = {
             'time': r['time'],
             'OPEN': r['open'],
             'HIGH': r['high'],
             'LOW': r['low'],
             'CLOSE': r['close'],
             'TICKVOL': r['tick_volume'],
-            'VOL': r.get('real_volume', 0),
-            'SPREAD': r.get('spread', 0),
-        })
+        }
+        if field_names and 'real_volume' in field_names:
+            row['VOL'] = r['real_volume']
+        else:
+            row['VOL'] = 0
+        if field_names and 'spread' in field_names:
+            row['SPREAD'] = r['spread']
+        else:
+            row['SPREAD'] = 0
+        rows.append(row)
     df = pd.DataFrame(rows)
     df['DATETIME'] = pd.to_datetime(df['time'], unit='s')
     df['DATE'] = df['DATETIME'].dt.strftime('%Y.%m.%d')
