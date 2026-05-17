@@ -151,6 +151,10 @@ CFG = {
     'atr_period':            14,
     'sl_multiplier':         1.5,
     'tp_multiplier':         1.5,    # R:R = tp_multiplier / sl_multiplier
+    # Variable R:R overrides per pattern (tp_multiplier override).
+    # If a pattern is listed here, its TP multiplier is overridden.
+    # Example: Engulfing at 1.5:1, Morning Star at 2.5:1
+    'rr_by_pattern': {},
     # Higher-timeframe ATR source per trading TF.
     # M5/M15 ATR is tiny → use H1 ATR for SL/TP sizing on fast TFs.
     # Set to None or same as trading TF to use native ATR.
@@ -186,7 +190,7 @@ CFG = {
         'M15': 240,   # 240 × 15 min = 60 h
         'H1':  60,    # 60  × 1 h    = 60 h
         'H4':  15,    # 15  × 4 h    = 60 h
-        'D1':  5,     # 5   × 1 day  = 5 days (~1 trading week)
+        'D1':  20,    # 20  × 1 day  = 20 days (~4 trading weeks)
     },
 
     # ── Full Backtest ──────────────────────────────────────────────
@@ -441,9 +445,9 @@ def broker_time(ts):
     """Convert a Unix timestamp (from MT5) to broker server time.
 
     MT5 brokers encode their server time directly in the timestamps,
-    so datetime.utcfromtimestamp() returns the broker's clock time.
+    so fromtimestamp with UTC returns the broker's clock time.
     """
-    return datetime.utcfromtimestamp(int(ts))
+    return datetime.fromtimestamp(int(ts), tz=None)
 
 
 def log_message(msg, cfg=None):
@@ -552,7 +556,12 @@ def detect_trend(rates, cfg=None):
 
 
 def compute_atr(rates, cfg=None):
-    """Compute ATR from structured-array rates."""
+    """Compute ATR using Wilder's exponential smoothing (standard ATR method).
+
+    Uses alpha = 1/period for EMA smoothing, matching MT5's built-in ATR.
+    This is the industry-standard method and differs from simple moving average
+    by 5-15% on typical data.
+    """
     if cfg is None:
         cfg = CFG
     period = cfg.get('atr_period', 14)
@@ -565,9 +574,14 @@ def compute_atr(rates, cfg=None):
         hc = abs(rates[i]['high'] - rates[i-1]['close'])
         lc = abs(rates[i]['low'] - rates[i-1]['close'])
         tr_values.append(max(hl, hc, lc))
-    if len(tr_values) >= period:
-        return np.mean(tr_values[-period:])
-    return np.mean(tr_values)
+    if len(tr_values) < period:
+        return np.mean(tr_values)
+    # Wilder's smoothing: seed with SMA of first 'period' values, then EMA
+    atr_val = np.mean(tr_values[:period])
+    alpha = 1.0 / period
+    for i in range(period, len(tr_values)):
+        atr_val = alpha * tr_values[i] + (1.0 - alpha) * atr_val
+    return atr_val
 
 
 def get_candle_metrics(candle, cfg=None):
@@ -990,123 +1004,209 @@ def _merge_multitf_stats(v6_stats, output_dir, symbol):
     for tf_label, tf_data in v6_stats.get('timeframes', {}).items():
         if 'overall' in tf_data:
             stats['timeframes'][tf_label] = tf_data['overall']
+        # Carry over per-TF pattern stats from enriched JSON (v7+)
+        if 'patterns' in tf_data:
+            for pat, pat_data in tf_data['patterns'].items():
+                stats['patterns_tf'][tf_label][pat] = pat_data
 
-    # ── Parse ALL pattern_summary CSVs ──
-    pattern_csvs = sorted(
-        glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_pattern_summary.csv")),
-        reverse=True
-    )
-    if pattern_csvs:
-        try:
-            all_dfs = [pd.read_csv(p) for p in pattern_csvs]
-            df_all = pd.concat(all_dfs, ignore_index=True)
-            # Per-TF pattern stats
-            for tf in tf_order:
-                tf_rows = df_all[df_all.get('Timeframe', pd.Series(dtype=str)) == tf]
-                if len(tf_rows) > 0:
-                    for _, row in tf_rows.iterrows():
-                        pat = row['Pattern']
-                        stats['patterns_tf'][tf][pat] = {
-                            'win_rate': round(float(row.get('Win_Rate_%', 0)), 1),
-                            'total': int(row.get('Total', 0)),
-                            'avg_max_r': round(float(row.get('Avg_Max_R', 0)), 2),
-                        }
-            # Merged across all TFs (weighted by signal count)
-            for pat in df_all['Pattern'].unique():
-                rows = df_all[df_all['Pattern'] == pat]
-                total_sig = int(rows['Total'].sum())
-                if total_sig > 0:
-                    total_wins = 0
-                    total_maxr_w = 0.0
-                    total_sl_w = 0.0
-                    total_tp_w = 0.0
-                    for _, r in rows.iterrows():
-                        n = int(r.get('Total', 0))
-                        if n > 0:
-                            total_wins += round(float(r.get('Win_Rate_%', 0)) * n / 100)
-                            total_maxr_w += float(r.get('Avg_Max_R', 0)) * n
-                            total_sl_w += float(r.get('SL_Hit_%', 0)) * n
-                            total_tp_w += float(r.get('TP_Hit_%', 0)) * n
-                    stats['patterns'][pat] = {
-                        'win_rate': round(total_wins / total_sig * 100, 1),
-                        'total': total_sig,
-                        'avg_max_r': round(total_maxr_w / total_sig, 2),
-                        'sl_hit_pct': round(total_sl_w / total_sig, 1),
-                        'tp_hit_pct': round(total_tp_w / total_sig, 1),
-                    }
-        except Exception:
-            pass
+    # ── Build merged stats from enriched JSON if available (v7+), else fall back to CSVs ──
+    # Check if the JSON has per-TF pattern/session/cross data (v7 enrichment)
+    has_enriched_data = any('patterns' in tf_data for tf_data in v6_stats.get('timeframes', {}).values())
 
-    # ── Parse ALL session_summary CSVs ──
-    session_csvs = sorted(
-        glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_session_summary.csv")),
-        reverse=True
-    )
-    if session_csvs:
-        try:
-            all_dfs = [pd.read_csv(s) for s in session_csvs]
-            df_all = pd.concat(all_dfs, ignore_index=True)
-            for sess in df_all['Session'].unique():
-                rows = df_all[df_all['Session'] == sess]
-                total_sig = int(rows['Signals'].sum())
-                if total_sig > 0:
-                    total_wins = 0
-                    total_maxr_w = 0.0
-                    total_sl_w = 0.0
-                    total_tp_w = 0.0
-                    for _, r in rows.iterrows():
-                        n = int(r.get('Signals', 0))
-                        if n > 0:
-                            total_wins += round(float(r.get('Win_Rate_%', 0)) * n / 100)
-                            total_maxr_w += float(r.get('Avg_Max_R', 0)) * n
-                            total_sl_w += float(r.get('SL_Hit_%', 0)) * n
-                            total_tp_w += float(r.get('TP_Hit_%', 0)) * n
-                    stats['sessions'][sess] = {
-                        'win_rate': round(total_wins / total_sig * 100, 1),
-                        'signals': total_sig,
-                        'avg_max_r': round(total_maxr_w / total_sig, 2),
-                        'sl_hit_pct': round(total_sl_w / total_sig, 1),
-                        'tp_hit_pct': round(total_tp_w / total_sig, 1),
-                    }
-        except Exception:
-            pass
+    if has_enriched_data:
+        # Build merged stats directly from JSON — no CSV parsing needed
+        # Merged patterns (weighted average across TFs)
+        all_pat_data = {}  # pat -> list of (n, wr, amr, sl_pct, tp_pct)
+        for tf_label, tf_data in v6_stats.get('timeframes', {}).items():
+            for pat, pat_data in tf_data.get('patterns', {}).items():
+                if pat not in all_pat_data:
+                    all_pat_data[pat] = []
+                all_pat_data[pat].append(pat_data)
 
-    # ── Parse ALL detections CSVs for overall + cross stats ──
-    det_csvs = sorted(
-        glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_detections.csv")),
-        reverse=True
-    )
-    if det_csvs:
-        try:
-            all_dfs = [pd.read_csv(d) for d in det_csvs]
-            df_d = pd.concat(all_dfs, ignore_index=True)
-            directional = df_d[df_d['Direction'] != 'Neutral']
-            if len(directional) > 0:
-                s = int((directional['Prediction_Success'] == True).sum())
-                f_ = int((directional['Prediction_Success'] == False).sum())
-                stats['overall'] = {
-                    'win_rate': round(s / (s + f_) * 100, 1) if (s + f_) > 0 else 0,
-                    'total_signals': len(directional),
-                    'avg_max_r': round(float(directional['Max_R'].dropna().mean()), 2),
-                    'sl_hit_pct': round(float((directional['SL_Hit'] == True).sum() / len(directional) * 100), 1),
-                    'tp_hit_pct': round(float((directional['TP_Hit'] == True).sum() / len(directional) * 100), 1),
+        for pat, entries in all_pat_data.items():
+            total_sig = sum(e.get('total', 0) for e in entries)
+            if total_sig > 0:
+                total_wins = sum(round(e.get('win_rate', 0) * e.get('total', 0) / 100) for e in entries)
+                total_maxr_w = sum(e.get('avg_max_r', 0) * e.get('total', 0) for e in entries)
+                total_sl_w = sum(e.get('sl_hit_pct', 0) * e.get('total', 0) for e in entries)
+                total_tp_w = sum(e.get('tp_hit_pct', 0) * e.get('total', 0) for e in entries)
+                stats['patterns'][pat] = {
+                    'win_rate': round(total_wins / total_sig * 100, 1),
+                    'total': total_sig,
+                    'avg_max_r': round(total_maxr_w / total_sig, 2),
+                    'sl_hit_pct': round(total_sl_w / total_sig, 1),
+                    'tp_hit_pct': round(total_tp_w / total_sig, 1),
                 }
-                cross = {}
-                for pat_name in directional['Pattern'].unique():
-                    pat_dir = directional[directional['Pattern'] == pat_name]
-                    for sess in pat_dir['Session'].unique():
-                        ps = pat_dir[pat_dir['Session'] == sess]
-                        if len(ps) >= 3:
-                            s_ps = int((ps['Prediction_Success'] == True).sum())
-                            f_ps = int((ps['Prediction_Success'] == False).sum())
-                            cross[f"{pat_name}|{sess}"] = {
-                                'win_rate': round(s_ps / (s_ps + f_ps) * 100, 1) if (s_ps + f_ps) > 0 else 0,
-                                'signals': len(ps),
-                                'avg_max_r': round(float(ps['Max_R'].dropna().mean()), 2),
+
+        # Merged sessions (weighted average across TFs)
+        all_sess_data = {}
+        for tf_label, tf_data in v6_stats.get('timeframes', {}).items():
+            for sess, sess_data in tf_data.get('sessions', {}).items():
+                if sess not in all_sess_data:
+                    all_sess_data[sess] = []
+                all_sess_data[sess].append(sess_data)
+
+        for sess, entries in all_sess_data.items():
+            total_sig = sum(e.get('signals', 0) for e in entries)
+            if total_sig > 0:
+                total_wins = sum(round(e.get('win_rate', 0) * e.get('signals', 0) / 100) for e in entries)
+                total_maxr_w = sum(e.get('avg_max_r', 0) * e.get('signals', 0) for e in entries)
+                stats['sessions'][sess] = {
+                    'win_rate': round(total_wins / total_sig * 100, 1),
+                    'signals': total_sig,
+                    'avg_max_r': round(total_maxr_w / total_sig, 2),
+                }
+
+        # Merged cross stats (weighted average across TFs)
+        all_cross_data = {}
+        for tf_label, tf_data in v6_stats.get('timeframes', {}).items():
+            for cross_key, cross_data in tf_data.get('cross', {}).items():
+                if cross_key not in all_cross_data:
+                    all_cross_data[cross_key] = []
+                all_cross_data[cross_key].append(cross_data)
+
+        for cross_key, entries in all_cross_data.items():
+            total_sig = sum(e.get('signals', 0) for e in entries)
+            if total_sig >= 3:
+                total_wins = sum(round(e.get('win_rate', 0) * e.get('signals', 0) / 100) for e in entries)
+                total_maxr_w = sum(e.get('avg_max_r', 0) * e.get('signals', 0) for e in entries)
+                stats['cross'][cross_key] = {
+                    'win_rate': round(total_wins / total_sig * 100, 1),
+                    'signals': total_sig,
+                    'avg_max_r': round(total_maxr_w / total_sig, 2),
+                }
+
+        # Overall (aggregate across all TFs)
+        total_all = sum(stats['timeframes'].get(tf, {}).get('total_signals', 0) for tf in tf_order)
+        if total_all > 0:
+            total_wins = sum(round(stats['timeframes'].get(tf, {}).get('win_rate', 0) *
+                                   stats['timeframes'].get(tf, {}).get('total_signals', 0) / 100)
+                            for tf in tf_order)
+            total_maxr = sum(stats['timeframes'].get(tf, {}).get('avg_max_r', 0) *
+                             stats['timeframes'].get(tf, {}).get('total_signals', 0)
+                            for tf in tf_order)
+            stats['overall'] = {
+                'win_rate': round(total_wins / total_all * 100, 1),
+                'total_signals': total_all,
+                'avg_max_r': round(total_maxr / total_all, 2),
+            }
+    else:
+        # Fall back to CSV parsing for older JSON formats (v6 without enrichment)
+        pattern_csvs = sorted(
+            glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_pattern_summary.csv")),
+            reverse=True
+        )
+        if pattern_csvs:
+            try:
+                all_dfs = [pd.read_csv(p) for p in pattern_csvs]
+                df_all = pd.concat(all_dfs, ignore_index=True)
+                # Per-TF pattern stats
+                for tf in tf_order:
+                    tf_rows = df_all[df_all.get('Timeframe', pd.Series(dtype=str)) == tf]
+                    if len(tf_rows) > 0:
+                        for _, row in tf_rows.iterrows():
+                            pat = row['Pattern']
+                            stats['patterns_tf'][tf][pat] = {
+                                'win_rate': round(float(row.get('Win_Rate_%', 0)), 1),
+                                'total': int(row.get('Total', 0)),
+                                'avg_max_r': round(float(row.get('Avg_Max_R', 0)), 2),
                             }
-                stats['cross'] = cross
-        except Exception:
-            pass
+                # Merged across all TFs (weighted by signal count)
+                for pat in df_all['Pattern'].unique():
+                    rows = df_all[df_all['Pattern'] == pat]
+                    total_sig = int(rows['Total'].sum())
+                    if total_sig > 0:
+                        total_wins = 0
+                        total_maxr_w = 0.0
+                        total_sl_w = 0.0
+                        total_tp_w = 0.0
+                        for _, r in rows.iterrows():
+                            n = int(r.get('Total', 0))
+                            if n > 0:
+                                total_wins += round(float(r.get('Win_Rate_%', 0)) * n / 100)
+                                total_maxr_w += float(r.get('Avg_Max_R', 0)) * n
+                                total_sl_w += float(r.get('SL_Hit_%', 0)) * n
+                                total_tp_w += float(r.get('TP_Hit_%', 0)) * n
+                        stats['patterns'][pat] = {
+                            'win_rate': round(total_wins / total_sig * 100, 1),
+                            'total': total_sig,
+                            'avg_max_r': round(total_maxr_w / total_sig, 2),
+                            'sl_hit_pct': round(total_sl_w / total_sig, 1),
+                            'tp_hit_pct': round(total_tp_w / total_sig, 1),
+                        }
+            except Exception:
+                pass
+
+        # ── Parse ALL session_summary CSVs ──
+        session_csvs = sorted(
+            glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_session_summary.csv")),
+            reverse=True
+        )
+        if session_csvs:
+            try:
+                all_dfs = [pd.read_csv(s) for s in session_csvs]
+                df_all = pd.concat(all_dfs, ignore_index=True)
+                for sess in df_all['Session'].unique():
+                    rows = df_all[df_all['Session'] == sess]
+                    total_sig = int(rows['Signals'].sum())
+                    if total_sig > 0:
+                        total_wins = 0
+                        total_maxr_w = 0.0
+                        total_sl_w = 0.0
+                        total_tp_w = 0.0
+                        for _, r in rows.iterrows():
+                            n = int(r.get('Signals', 0))
+                            if n > 0:
+                                total_wins += round(float(r.get('Win_Rate_%', 0)) * n / 100)
+                                total_maxr_w += float(r.get('Avg_Max_R', 0)) * n
+                                total_sl_w += float(r.get('SL_Hit_%', 0)) * n
+                                total_tp_w += float(r.get('TP_Hit_%', 0)) * n
+                        stats['sessions'][sess] = {
+                            'win_rate': round(total_wins / total_sig * 100, 1),
+                            'signals': total_sig,
+                            'avg_max_r': round(total_maxr_w / total_sig, 2),
+                            'sl_hit_pct': round(total_sl_w / total_sig, 1),
+                            'tp_hit_pct': round(total_tp_w / total_sig, 1),
+                        }
+            except Exception:
+                pass
+
+        # ── Parse ALL detections CSVs for overall + cross stats ──
+        det_csvs = sorted(
+            glob.glob(os.path.join(output_dir, f"{symbol}_*_*_to_*_detections.csv")),
+            reverse=True
+        )
+        if det_csvs:
+            try:
+                all_dfs = [pd.read_csv(d) for d in det_csvs]
+                df_d = pd.concat(all_dfs, ignore_index=True)
+                directional = df_d[df_d['Direction'] != 'Neutral']
+                if len(directional) > 0:
+                    s = int((directional['Prediction_Success'] == True).sum())
+                    f_ = int((directional['Prediction_Success'] == False).sum())
+                    stats['overall'] = {
+                        'win_rate': round(s / (s + f_) * 100, 1) if (s + f_) > 0 else 0,
+                        'total_signals': len(directional),
+                        'avg_max_r': round(float(directional['Max_R'].dropna().mean()), 2),
+                        'sl_hit_pct': round(float((directional['SL_Hit'] == True).sum() / len(directional) * 100), 1),
+                        'tp_hit_pct': round(float((directional['TP_Hit'] == True).sum() / len(directional) * 100), 1),
+                    }
+                    cross = {}
+                    for pat_name in directional['Pattern'].unique():
+                        pat_dir = directional[directional['Pattern'] == pat_name]
+                        for sess in pat_dir['Session'].unique():
+                            ps = pat_dir[pat_dir['Session'] == sess]
+                            if len(ps) >= 3:
+                                s_ps = int((ps['Prediction_Success'] == True).sum())
+                                f_ps = int((ps['Prediction_Success'] == False).sum())
+                                cross[f"{pat_name}|{sess}"] = {
+                                    'win_rate': round(s_ps / (s_ps + f_ps) * 100, 1) if (s_ps + f_ps) > 0 else 0,
+                                    'signals': len(ps),
+                                    'avg_max_r': round(float(ps['Max_R'].dropna().mean()), 2),
+                                }
+                    stats['cross'] = cross
+            except Exception:
+                pass
     return stats
 
 
@@ -1193,22 +1293,43 @@ def compute_cross_quality(pattern_name, session, stats, cfg=None):
         return (wr, n, amr, 'NO EDGE', 'red')
 
 
-def compute_signal_score(pattern_name, session, direction, stats, cfg=None):
+def compute_signal_score(pattern_name, session, direction, stats, cfg=None, tf_label=None):
     """Compute a 0-100 signal quality score based on historical backtest stats.
 
-    Score formula:
-      base_score = pattern_win_rate (0-100)
-      session_bonus = +10 if session WR > 55%, -10 if < 45%
-      confidence_factor = min(1.0, signals / 30)
-      r_factor = avg_max_r / 1.0
+    Enhanced formula (v7):
+      base = raw win rate (0-100)
+      sample_penalty = penalty if sample size is small (avoids over-scoring rare patterns)
+      session_gradient = proportional session bonus/penalty (not binary)
+      confluence_bonus = +5 if confluence >= 3 (from backtest confluence stats)
       tier_bonus = +5 for Tier A, +3 for Tier B
+
+    Prefers TF-specific stats when available (tf_label provided and stats have
+    per-TF breakdown), falling back to merged aggregate stats.
     """
     if cfg is None: cfg = CFG
     min_signals = cfg.get('min_signals_for_stats', 5)
-    pat_stats = stats.get('patterns', {}).get(pattern_name, {})
-    sess_stats = stats.get('sessions', {}).get(session, {})
+
+    # Try TF-specific stats first if tf_label is provided
+    pat_stats = {}
+    sess_stats = {}
     cross_key = f"{pattern_name}|{session}"
-    cross_stats = stats.get('cross', {}).get(cross_key, {})
+    cross_stats = {}
+
+    if tf_label and tf_label in stats.get('timeframes', {}):
+        tf_data = stats['timeframes'][tf_label]
+        pat_stats = tf_data.get('patterns', {}).get(pattern_name, {})
+        sess_stats = tf_data.get('sessions', {}).get(session, {})
+        cross_stats = tf_data.get('cross', {}).get(cross_key, {})
+
+    # Fallback to merged stats if TF-specific not available
+    if not pat_stats:
+        pat_stats = stats.get('patterns', {}).get(pattern_name, {})
+    if not sess_stats:
+        sess_stats = stats.get('sessions', {}).get(session, {})
+    if not cross_stats:
+        cross_stats = stats.get('cross', {}).get(cross_key, {})
+
+    # Select most specific data source with sufficient sample
     if cross_stats and cross_stats.get('signals', 0) >= min_signals:
         wr = cross_stats.get('win_rate', 50)
         n = cross_stats.get('signals', 0)
@@ -1224,19 +1345,58 @@ def compute_signal_score(pattern_name, session, direction, stats, cfg=None):
         amr = overall.get('avg_max_r', 0)
     else:
         return None
+
+    # Base score = raw win rate
     base_score = wr
-    confidence = min(1.0, n / 30.0)
-    session_bonus = 0
+
+    # Sample penalty: penalize low sample sizes instead of multiplying
+    # At 30+ signals, no penalty. Below 30, linear penalty down to -15 at min_signals.
+    if n >= 30:
+        sample_penalty = 0
+    elif n >= min_signals:
+        sample_penalty = -15.0 * (1.0 - (n - min_signals) / (30.0 - min_signals))
+    else:
+        sample_penalty = -20.0
+
+    # Session gradient: proportional bonus/penalty based on session WR
+    session_gradient = 0
     if sess_stats and sess_stats.get('signals', 0) >= min_signals:
         sess_wr = sess_stats.get('win_rate', 50)
-        if sess_wr > 55:
-            session_bonus = 10
-        elif sess_wr < 45:
-            session_bonus = -10
-    r_factor = min(amr, 2.0) * 10
+        # Gradient: +8 at 60% WR, +4 at 55%, 0 at 50%, -4 at 45%, -8 at 40%
+        session_gradient = round((sess_wr - 50) * 0.8, 1)
+
+    # Confluence bonus: +5 if high-confluence signals (upper half of range) perform well
+    # With d1_trend_filter active, effective range is 0-6, so high = scores 3,4,5
+    # Without the filter, effective range is 0-7, so high = scores 4,5,6
+    confluence_bonus = 0
+    if tf_label and tf_label in stats.get('timeframes', {}):
+        conf_data = stats['timeframes'][tf_label].get('confluence', {})
+        # Determine threshold based on d1_trend_filter
+        if cfg.get('d1_trend_filter', False):
+            high_keys = ['3', '4', '5']  # upper half of 0-6 range
+        else:
+            high_keys = ['4', '5', '6']  # upper half of 0-7 range
+        high_conf = None
+        for k in high_keys:
+            entry = conf_data.get(k, {})
+            if entry.get('signals', 0) >= 5:
+                high_conf = entry
+                break
+        if high_conf and high_conf.get('win_rate', 0) >= 55:
+            confluence_bonus = 5
+
+    # Tier bonus
     tier_letter, _, _ = compute_pattern_tier(pattern_name, stats, cfg)
     tier_bonus = 5 if tier_letter == 'A' else (3 if tier_letter == 'B' else 0)
-    score = base_score * confidence + session_bonus + r_factor + tier_bonus
+
+    # MFE bonus: patterns with higher MFE have more profit potential
+    mfe_bonus = 0
+    if amr >= 0.8:
+        mfe_bonus = 3
+    elif amr >= 0.5:
+        mfe_bonus = 1
+
+    score = base_score + sample_penalty + session_gradient + confluence_bonus + tier_bonus + mfe_bonus
     return round(max(0, min(100, score)), 1)
 
 
@@ -1377,18 +1537,18 @@ def print_top_setups(stats, cfg=None):
         print(line)
 
 
-def apply_signal_score_filter(patterns, stats, cfg=None):
+def apply_signal_score_filter(patterns, stats, cfg=None, tf_label=None):
     """Filter patterns by min_signal_score. Attaches signal_score to each pattern dict."""
     if cfg is None: cfg = CFG
     min_score = cfg.get('min_signal_score', 0)
     if min_score <= 0 or not stats:
         for p in patterns:
-            score = compute_signal_score(p['name'], p['session'], p['direction'], stats, cfg)
+            score = compute_signal_score(p['name'], p['session'], p['direction'], stats, cfg, tf_label=tf_label)
             p['signal_score'] = score
         return patterns
     filtered = []
     for p in patterns:
-        score = compute_signal_score(p['name'], p['session'], p['direction'], stats, cfg)
+        score = compute_signal_score(p['name'], p['session'], p['direction'], stats, cfg, tf_label=tf_label)
         p['signal_score'] = score
         if score is None or score >= min_score:
             filtered.append(p)
@@ -1689,7 +1849,7 @@ def format_pattern_output(candle, patterns, cfg=None, stats=None, tf_label='H4')
         # ── Signal quality score ──
         score = pat.get('signal_score')
         if score is None:
-            score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg)
+            score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg, tf_label=tf_label)
         if score is not None:
             if score >= 65:
                 score_label = "STRONG"; score_color = 'green'
@@ -1807,12 +1967,19 @@ def fetch_rates_range(symbol, tf_label, date_from, date_to, cfg=None):
 # ============================================================
 
 def fb_compute_atr(df, period):
+    """Compute ATR using Wilder's exponential smoothing (standard ATR method).
+
+    Returns a pd.Series aligned with df, using alpha = 1/period for EMA smoothing.
+    This matches MT5's built-in ATR indicator and the industry standard.
+    """
     tr = pd.DataFrame({
         'hl': df['HIGH'] - df['LOW'],
         'hc': abs(df['HIGH'] - df['CLOSE'].shift(1)),
         'lc': abs(df['LOW']  - df['CLOSE'].shift(1)),
     }).max(axis=1)
-    return tr.rolling(window=period, min_periods=1).mean()
+    # Wilder's smoothing: EMA with alpha = 1/period
+    alpha = 1.0 / period
+    return tr.ewm(alpha=alpha, adjust=False).mean()
 
 
 def fb_compute_htf_atr(df, htf_df, atr_period):
@@ -2029,51 +2196,105 @@ def fb_detect_falling_three_methods(df, idx, cfg=None):
 
 def simulate_forward_evaluation(df, idx, direction, sl_price, tp_price, r_levels,
                                  forward_candles, cfg=None, fill_price=None):
-    """Forward evaluation with intra-candle path simulation to avoid look-ahead bias."""
+    """Forward evaluation with intra-candle path simulation to avoid look-ahead bias.
+
+    Includes:
+      - Open-proximity heuristic for SL/TP ambiguity (whichever level is closer
+        to the candle open is assumed to be hit first)
+      - Time-to-SL/TP tracking (bars until SL or TP hit)
+      - MAE (Max Adverse Excursion) and MFE (Max Favorable Excursion) in R-multiples
+    """
     if cfg is None: cfg = CFG
     max_r_levels = cfg.get('max_r_levels', 5)
+    pip_divisor = cfg.get('pip_divisor', 0.0001)
     r_hits = {f'R{r}_Hit': None for r in range(1, max_r_levels+1)}
     sl_hit = tp_hit = False
     highest_r = 0
     outcome = 'Timeout'
+    bars_to_sl = None
+    bars_to_tp = None
+    mae_r = 0.0   # Max Adverse Excursion in R (worst drawdown)
+    mfe_r = 0.0   # Max Favorable Excursion in R (best profit)
 
     if direction not in ('Bullish', 'Bearish'):
         return {'sl_hit': None, 'tp_hit': None, 'outcome': 'N/A',
-                'max_r': None, 'r_hits': r_hits, 'fill_price': None, 'entry_filled': True}
+                'max_r': None, 'r_hits': r_hits, 'fill_price': None,
+                'entry_filled': True, 'bars_to_sl': None, 'bars_to_tp': None,
+                'mae_r': None, 'mfe_r': None}
 
     if idx + 1 >= len(df):
         return {'sl_hit': None, 'tp_hit': None, 'outcome': 'Timeout',
-                'max_r': 0, 'r_hits': r_hits, 'fill_price': None, 'entry_filled': False}
+                'max_r': 0, 'r_hits': r_hits, 'fill_price': None,
+                'entry_filled': False, 'bars_to_sl': None, 'bars_to_tp': None,
+                'mae_r': 0.0, 'mfe_r': 0.0}
+
+    entry = fill_price if fill_price is not None else df.iloc[idx]['CLOSE']
+    risk = abs(entry - sl_price) if sl_price is not None else 0.001
+    if risk == 0:
+        risk = 0.001
 
     end_idx = min(idx + 1 + forward_candles, len(df))
     future  = df.iloc[idx+1:end_idx]
     if len(future) == 0:
         return {'sl_hit': None, 'tp_hit': None, 'outcome': 'Timeout',
-                'max_r': 0, 'r_hits': r_hits, 'fill_price': None, 'entry_filled': False}
+                'max_r': 0, 'r_hits': r_hits, 'fill_price': None,
+                'entry_filled': False, 'bars_to_sl': None, 'bars_to_tp': None,
+                'mae_r': 0.0, 'mfe_r': 0.0}
 
+    bar_count = 0
     stopped = False
     for _, fc in future.iterrows():
         if stopped:
             break
+        bar_count += 1
         fc_high = fc['HIGH']; fc_low = fc['LOW']
         fc_open = fc['OPEN']; fc_close = fc['CLOSE']
-        is_bullish_c = fc_close > fc_open
-        is_bearish_c = fc_close < fc_open
+
+        # Track MAE/MFE before checking stops (intra-bar extremes)
+        if direction == 'Bullish':
+            adverse = entry - fc_low    # how far price went against us
+            favorable = fc_high - entry  # how far price went in our favor
+        else:
+            adverse = fc_high - entry
+            favorable = entry - fc_low
+        mae_r = max(mae_r, adverse / risk)
+        mfe_r = max(mfe_r, favorable / risk)
 
         sl_in_range = (fc_low  <= sl_price if direction == 'Bullish' else fc_high >= sl_price)
         tp_in_range = (fc_high >= tp_price if direction == 'Bullish' else fc_low  <= tp_price)
 
         if sl_in_range and tp_in_range:
-            sl_hit = tp_hit = True
-            if direction == 'Bullish':
-                outcome = 'SL_Hit' if is_bullish_c else ('TP_Hit' if is_bearish_c else 'SL_Hit')
+            # Both SL and TP within candle range — use open-proximity heuristic:
+            # whichever level is closer to the open price was likely hit first.
+            sl_dist = abs(fc_open - sl_price)
+            tp_dist = abs(fc_open - tp_price)
+            if tp_dist <= sl_dist:
+                # TP was likely hit first (it's closer to open)
+                tp_hit = True; outcome = 'TP_Hit'
+                bars_to_tp = bar_count
+                # Check R-levels up to current MFE
+                for r in range(1, max_r_levels+1):
+                    rv = r_levels.get(f'R{r}')
+                    if rv is not None:
+                        if (direction == 'Bullish' and fc_high >= rv) or (direction == 'Bearish' and fc_low <= rv):
+                            r_hits[f'R{r}_Hit'] = True; highest_r = max(highest_r, r)
+                # SL was also hit on this bar (but after TP)
+                sl_hit = True
+                bars_to_sl = bar_count
             else:
-                outcome = 'TP_Hit' if is_bullish_c else ('SL_Hit' if is_bearish_c else 'SL_Hit')
+                # SL was likely hit first (it's closer to open)
+                sl_hit = True; outcome = 'SL_Hit'
+                bars_to_sl = bar_count
+                # TP was also hit on this bar (but after SL)
+                tp_hit = True
+                bars_to_tp = bar_count
             stopped = True
         elif sl_in_range:
             sl_hit = True; outcome = 'SL_Hit'; stopped = True
+            bars_to_sl = bar_count
         elif tp_in_range:
             tp_hit = True; outcome = 'TP_Hit'
+            bars_to_tp = bar_count
             for r in range(1, max_r_levels+1):
                 rv = r_levels.get(f'R{r}')
                 if rv is not None:
@@ -2100,7 +2321,9 @@ def simulate_forward_evaluation(df, idx, direction, sl_price, tp_price, r_levels
             outcome = 'Marginal_Win' if final_close < benchmark else 'Marginal_Loss'
 
     return {'sl_hit': sl_hit, 'tp_hit': tp_hit, 'outcome': outcome,
-            'max_r': highest_r, 'r_hits': r_hits, 'fill_price': None, 'entry_filled': True}
+            'max_r': highest_r, 'r_hits': r_hits, 'fill_price': None,
+            'entry_filled': True, 'bars_to_sl': bars_to_sl, 'bars_to_tp': bars_to_tp,
+            'mae_r': round(mae_r, 3), 'mfe_r': round(mfe_r, 3)}
 
 
 # ============================================================
@@ -2235,16 +2458,178 @@ def fb_get_d1_trend_at_time(d1_df, h4_datetime, cfg=None):
     return d1_bar.iloc[-1].get('D1_TREND', 'ranging')
 
 
+# ============================================================
+# SUPPORT/RESISTANCE & RSI HELPERS
+# ============================================================
+
+def fb_detect_swing_levels(df, idx, lookback=50, cfg=None):
+    """Detect nearby swing highs and lows for support/resistance context.
+
+    Returns dict with:
+      - near_support: bool — price is within 1 ATR of a recent swing low
+      - near_resistance: bool — price is within 1 ATR of a recent swing high
+      - at_swing_low: bool — candle low is the lowest in the lookback window
+      - at_swing_high: bool — candle high is the highest in the lookback window
+    """
+    if cfg is None: cfg = CFG
+    lookback = min(lookback, idx)
+    if lookback < 5:
+        return {'near_support': False, 'near_resistance': False,
+                'at_swing_low': False, 'at_swing_high': False}
+    subset = df.iloc[idx - lookback:idx + 1]
+    row = df.iloc[idx]
+    current_atr = row.get('ATR', 0)
+    if pd.isna(current_atr) or current_atr <= 0:
+        current_atr = subset['HIGH'].sub(subset['LOW']).mean()
+    if current_atr <= 0:
+        current_atr = 0.001
+
+    # Find swing highs and lows (local extremes using a 5-bar window)
+    swing_highs = []
+    swing_lows = []
+    for i in range(2, len(subset) - 2):
+        s = subset.iloc[i]
+        if s['HIGH'] >= subset.iloc[i-1]['HIGH'] and s['HIGH'] >= subset.iloc[i-2]['HIGH'] \
+           and s['HIGH'] >= subset.iloc[i+1]['HIGH'] and s['HIGH'] >= subset.iloc[i+2]['HIGH']:
+            swing_highs.append(s['HIGH'])
+        if s['LOW'] <= subset.iloc[i-1]['LOW'] and s['LOW'] <= subset.iloc[i-2]['LOW'] \
+           and s['LOW'] <= subset.iloc[i+1]['LOW'] and s['LOW'] <= subset.iloc[i+2]['LOW']:
+            swing_lows.append(s['LOW'])
+
+    near_support = any(abs(row['LOW'] - sl) <= current_atr for sl in swing_lows) if swing_lows else False
+    near_resistance = any(abs(row['HIGH'] - sh) <= current_atr for sh in swing_highs) if swing_highs else False
+    at_swing_low = row['LOW'] <= subset['LOW'].min() + current_atr * 0.1
+    at_swing_high = row['HIGH'] >= subset['HIGH'].max() - current_atr * 0.1
+
+    return {
+        'near_support': near_support,
+        'near_resistance': near_resistance,
+        'at_swing_low': at_swing_low,
+        'at_swing_high': at_swing_high,
+    }
+
+
+def fb_compute_rsi(df, idx, period=14):
+    """Compute RSI at a given index using Wilder's smoothing method.
+
+    Returns the RSI value (0-100) or None if insufficient data.
+    """
+    if idx < period + 1:
+        return None
+    subset = df.iloc[max(0, idx - period * 3):idx + 1]
+    if len(subset) < period + 1:
+        return None
+    deltas = subset['CLOSE'].diff().dropna()
+    if len(deltas) < period:
+        return None
+    gains = deltas.where(deltas > 0, 0.0)
+    losses = (-deltas).where(deltas < 0, 0.0)
+    # Seed with SMA
+    avg_gain = gains.iloc[:period].mean()
+    avg_loss = losses.iloc[:period].mean()
+    if avg_loss == 0:
+        return 100.0
+    # Wilder's smoothing
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains.iloc[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses.iloc[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - (100.0 / (1.0 + rs)), 1)
+
+
+def fb_compute_confluence(direction, trend, d1_trend, vol_confirmed, sr_context, rsi_value, session_quality, cfg=None):
+    """Compute a confluence score (0-6 with D1 filter, 0-7 without) based on multiple confirming factors.
+
+    Each factor that aligns with the trade direction adds 1 point:
+      1. Trend alignment — trade with the local trend
+      2. D1 trend alignment — trade with the daily trend (SKIPPED when d1_trend_filter is active, since it's guaranteed)
+      3. Volume confirmation — above-average volume on signal candle
+      4. Support/Resistance context — near key level
+      5. RSI extreme — oversold for bullish, overbought for bearish
+      6. At swing extreme — at a swing high/low
+      7. Session quality — PRIME or FAVORABLE session
+
+    Returns (confluence_score, confluence_factors_list)
+    """
+    if cfg is None: cfg = CFG
+    score = 0
+    factors = []
+
+    # 1. Trend alignment
+    if direction == 'Bullish' and trend == 'uptrend':
+        score += 1; factors.append('trend')
+    elif direction == 'Bearish' and trend == 'downtrend':
+        score += 1; factors.append('trend')
+
+    # 2. D1 trend alignment — skip when d1_trend_filter is active
+    #    (the filter already guarantees alignment, so counting it would
+    #    inflate every score by +1 and destroy score differentiation)
+    if not cfg.get('d1_trend_filter', False):
+        if direction == 'Bullish' and d1_trend == 'uptrend':
+            score += 1; factors.append('d1_trend')
+        elif direction == 'Bearish' and d1_trend == 'downtrend':
+            score += 1; factors.append('d1_trend')
+
+    # 3. Volume confirmation
+    if vol_confirmed:
+        score += 1; factors.append('volume')
+
+    # 4. S/R context — near support for bullish, near resistance for bearish
+    if sr_context.get('near_support') and direction == 'Bullish':
+        score += 1; factors.append('support')
+    elif sr_context.get('near_resistance') and direction == 'Bearish':
+        score += 1; factors.append('resistance')
+
+    # 5. RSI extreme
+    if rsi_value is not None:
+        if direction == 'Bullish' and rsi_value < 35:
+            score += 1; factors.append(f'rsi_{rsi_value}')
+        elif direction == 'Bearish' and rsi_value > 65:
+            score += 1; factors.append(f'rsi_{rsi_value}')
+
+    # 6. At swing extreme
+    if sr_context.get('at_swing_low') and direction == 'Bullish':
+        score += 1; factors.append('swing_low')
+    elif sr_context.get('at_swing_high') and direction == 'Bearish':
+        score += 1; factors.append('swing_high')
+
+    # 7. Session quality
+    if session_quality in ('PRIME', 'FAVORABLE'):
+        score += 1; factors.append(f'session_{session_quality}')
+
+    return score, factors
+
+
 def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
                        forward_candles, cfg=None, d1_df=None, vol_confirmed=True,
                        tf_label='H4', d1_trend='N/A', atr_tf=None):
-    """Compute SL/TP/R-levels + forward evaluation for one pattern occurrence."""
+    """Compute SL/TP/R-levels + forward evaluation + confluence for one pattern occurrence.
+
+    Enhanced with:
+      - Variable R:R by pattern (rr_by_pattern config override)
+      - Support/Resistance context (swing level detection)
+      - RSI value at signal candle
+      - Confluence score (0-7) and factor list
+      - Time-to-SL/TP (bars_to_sl, bars_to_tp)
+      - MAE/MFE (Max Adverse/Favorable Excursion in R)
+    """
     if cfg is None: cfg = CFG
     row = df.iloc[idx]
     direction   = pinfo['Direction']
-    rr_ratio    = tp_mult / sl_mult
     pip_divisor = cfg.get('pip_divisor', 0.0001)
     max_r_levels = cfg.get('max_r_levels', 5)
+
+    # Variable R:R by pattern — override tp_mult if pattern is listed
+    rr_overrides = cfg.get('rr_by_pattern', {})
+    pattern_name = pinfo['Pattern']
+    if pattern_name in rr_overrides:
+        effective_tp_mult = rr_overrides[pattern_name]
+        rr_ratio = effective_tp_mult / sl_mult
+    else:
+        effective_tp_mult = tp_mult
+        rr_ratio = tp_mult / sl_mult
 
     if direction == 'Bullish':
         sl   = row['LOW'] - sl_mult * current_atr
@@ -2328,10 +2713,41 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
                 for r in range(1, max_r_levels+1): r_levels[f'R{r}'] = round(fill_price - r * risk, 5)
                 sl_pips = round(risk / pip_divisor, 1)
 
+    # ── Context analysis: S/R, RSI, confluence ──────────────────────
+    hour    = row['DATETIME'].hour
+    session = classify_session(hour, cfg)
+    trend   = fb_detect_trend(df, idx, cfg)
+
+    # Support/Resistance context
+    sr_context = fb_detect_swing_levels(df, idx, lookback=50, cfg=cfg)
+
+    # RSI
+    rsi_value = fb_compute_rsi(df, idx, period=14)
+
+    # Session quality (for confluence scoring)
+    # We need stats to compute session quality, but during backtest we don't have stats yet.
+    # Use a simple heuristic based on session name instead.
+    prime_sessions = {'London/NY Overlap', 'London Open'}
+    favorable_sessions = {'London Morning'}
+    if session in prime_sessions:
+        session_quality = 'PRIME'
+    elif session in favorable_sessions:
+        session_quality = 'FAVORABLE'
+    elif session in ('NY Afternoon', 'Asia'):
+        session_quality = 'NEUTRAL'
+    else:
+        session_quality = 'UNFAVORABLE'
+
+    # Confluence score
+    confluence_score, confluence_factors = fb_compute_confluence(
+        direction, trend, d1_trend, vol_confirmed, sr_context, rsi_value, session_quality, cfg)
+
     # Forward evaluation
     prediction_success = sl_hit_result = tp_hit_result = None
     outcome = 'Timeout'; max_r = 0
     r_hits = {f'R{r}_Hit': None for r in range(1, max_r_levels+1)}
+    bars_to_sl = None; bars_to_tp = None
+    mae_r = 0.0; mfe_r = 0.0
 
     if no_fill:
         outcome = 'No_Fill'; entry_filled = False
@@ -2340,12 +2756,10 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
                                           forward_candles, cfg, fill_price=fill_price)
         sl_hit_result = fwd['sl_hit']; tp_hit_result = fwd['tp_hit']
         outcome = fwd['outcome']; max_r = fwd['max_r']; r_hits = fwd['r_hits']
+        bars_to_sl = fwd.get('bars_to_sl'); bars_to_tp = fwd.get('bars_to_tp')
+        mae_r = fwd.get('mae_r', 0.0); mfe_r = fwd.get('mfe_r', 0.0)
         prediction_success = (True  if outcome in ('TP_Hit', 'Marginal_Win') else
                               False if outcome in ('SL_Hit', 'Marginal_Loss', 'No_Fill') else None)
-
-    hour    = row['DATETIME'].hour
-    session = classify_session(hour, cfg)
-    trend   = fb_detect_trend(df, idx, cfg)
 
     result = {
         'Timeframe': tf_label,
@@ -2368,6 +2782,17 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
         'Volume_Confirmed': vol_confirmed,
         'Candles_in_Pattern': pinfo['Candles'],
         'Forward_Candles': forward_candles,
+        # New fields
+        'Bars_to_SL': bars_to_sl, 'Bars_to_TP': bars_to_tp,
+        'MAE_R': mae_r, 'MFE_R': mfe_r,
+        'RSI': rsi_value,
+        'Near_Support': sr_context['near_support'],
+        'Near_Resistance': sr_context['near_resistance'],
+        'At_Swing_Low': sr_context['at_swing_low'],
+        'At_Swing_High': sr_context['at_swing_high'],
+        'Confluence_Score': confluence_score,
+        'Confluence_Factors': '|'.join(confluence_factors) if confluence_factors else '',
+        'RR_Override': pattern_name if pattern_name in rr_overrides else '',
     }
     for r in range(1, max_r_levels+1):
         rk = f'R{r}'
@@ -2511,7 +2936,7 @@ def run_scanner(cfg=None):
     symbol     = cfg['symbol']
 
     log_message(C('cyan', '=' * 70), cfg)
-    log_message(C('bold', f"  {symbol} MULTI-TIMEFRAME PATTERN SCANNER v6 — STARTING"), cfg)
+    log_message(C('bold', f"  {symbol} MULTI-TIMEFRAME PATTERN SCANNER v7 — STARTING"), cfg)
     log_message(C('cyan', '=' * 70), cfg)
     log_message(f"Active timeframes: {C('yellow', ', '.join(active_tfs))}", cfg)
     sl_str = f"{cfg['sl_multiplier']}x ATR"
@@ -2610,14 +3035,14 @@ def run_scanner(cfg=None):
                         # Scan the most recent closed candle on startup
                         if len(rates) >= 2:
                             pats = scan_patterns(list(rates[:-1]), cfg, d1_rates_cache, tf_label, htf_atr_rates)
-                            pats = apply_signal_score_filter(pats, stats, cfg)
+                            pats = apply_signal_score_filter(pats, stats, cfg, tf_label=tf_label)
                             log_message(format_pattern_output(rates[-2], pats, cfg, stats, tf_label), cfg)
                             # Play sound alert for strong signals on startup scan
                             for pat in pats:
                                 if pat.get('direction') in ('Bullish', 'Bearish'):
                                     score = pat.get('signal_score')
                                     if score is None:
-                                        score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg)
+                                        score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg, tf_label=tf_label)
                                     play_signal_beep(pat['direction'], score, cfg)
                         continue
 
@@ -2629,7 +3054,7 @@ def run_scanner(cfg=None):
                             )), cfg
                         )
                         pats = scan_patterns(list(rates[:-1]), cfg, d1_rates_cache, tf_label, htf_atr_rates)
-                        pats = apply_signal_score_filter(pats, stats, cfg)
+                        pats = apply_signal_score_filter(pats, stats, cfg, tf_label=tf_label)
                         output = format_pattern_output(rates[-2], pats, cfg, stats, tf_label)
                         log_message(output, cfg)
 
@@ -2638,7 +3063,7 @@ def run_scanner(cfg=None):
                             if pat.get('direction') in ('Bullish', 'Bearish'):
                                 score = pat.get('signal_score')
                                 if score is None:
-                                    score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg)
+                                    score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg, tf_label=tf_label)
                                 play_signal_beep(pat['direction'], score, cfg)
 
                         last_candle_time[tf_label] = bar_time
@@ -2712,7 +3137,7 @@ def run_single_scan(cfg=None):
         atr_src = get_atr_tf(tf_label, cfg)
         htf_atr_rates = htf_atr_rates_cache.get(atr_src) if atr_src != tf_label else None
         pats     = scan_patterns(scan_src, cfg, d1_rates, tf_label, htf_atr_rates)
-        pats     = apply_signal_score_filter(pats, stats, cfg)
+        pats     = apply_signal_score_filter(pats, stats, cfg, tf_label=tf_label)
         log_message(format_pattern_output(closed, pats, cfg, stats, tf_label), cfg)
 
         # Play sound alert for strong directional signals
@@ -2720,7 +3145,7 @@ def run_single_scan(cfg=None):
             if pat.get('direction') in ('Bullish', 'Bearish'):
                 score = pat.get('signal_score')
                 if score is None:
-                    score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg)
+                    score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg, tf_label=tf_label)
                 play_signal_beep(pat['direction'], score, cfg)
 
     try: mt5.shutdown()
@@ -2819,7 +3244,7 @@ def run_full_backtest(args, cfg=None):
     out_dir    = args.output
 
     print("=" * 70)
-    print(f"  {symbol} MULTI-TIMEFRAME BACKTESTER v6")
+    print(f"  {symbol} MULTI-TIMEFRAME BACKTESTER v7")
     print("=" * 70)
     print(f"  Timeframes : {', '.join(active_tfs)}")
     print(f"  From       : {args.date_from}")
@@ -2921,6 +3346,14 @@ def run_full_backtest(args, cfg=None):
                     'TP_Hit_%': round((ds['TP_Hit'] == True).sum() / len(ds) * 100, 1),
                     'Avg_SL_Pips': round(ds['SL_Pips'].dropna().mean(), 1) if not ds['SL_Pips'].dropna().empty else 0,
                     'Avg_Max_R':   round(ds['Max_R'].dropna().mean(), 2)   if not ds['Max_R'].dropna().empty else 0,
+                    # New fields
+                    'Avg_MAE_R': round(ds['MAE_R'].dropna().mean(), 3) if 'MAE_R' in ds.columns and not ds['MAE_R'].dropna().empty else None,
+                    'Avg_MFE_R': round(ds['MFE_R'].dropna().mean(), 3) if 'MFE_R' in ds.columns and not ds['MFE_R'].dropna().empty else None,
+                    'Avg_Bars_to_TP': round(ds['Bars_to_TP'].dropna().mean(), 1) if 'Bars_to_TP' in ds.columns and not ds['Bars_to_TP'].dropna().empty else None,
+                    'Avg_RSI': round(ds['RSI'].dropna().mean(), 1) if 'RSI' in ds.columns and not ds['RSI'].dropna().empty else None,
+                    'At_Support_Pct': round((ds['Near_Support'] == True).sum() / max(len(ds),1) * 100, 1) if 'Near_Support' in ds.columns else None,
+                    'At_Resistance_Pct': round((ds['Near_Resistance'] == True).sum() / max(len(ds),1) * 100, 1) if 'Near_Resistance' in ds.columns else None,
+                    'Avg_Confluence': round(ds['Confluence_Score'].dropna().mean(), 1) if 'Confluence_Score' in ds.columns and not ds['Confluence_Score'].dropna().empty else None,
                 })
                 for r in range(1, max_r_levels+1):
                     col = f'R{r}_Hit'
@@ -2979,7 +3412,7 @@ def run_full_backtest(args, cfg=None):
             print(f"    Avg SL pips         : {directional['SL_Pips'].dropna().mean():.1f}")
             print(f"    Avg Max R           : {directional['Max_R'].dropna().mean():.2f}R")
 
-    # Save combined stats JSON
+    # Save combined stats JSON — ENRICHED with per-TF patterns/sessions/cross/confluence
     try:
         combined_stats = {'symbol': symbol, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                           'backtest_range': f"{args.date_from} to {args.date_to}",
@@ -2998,7 +3431,59 @@ def run_full_backtest(args, cfg=None):
                     'avg_max_r':    round(float(dirdf['Max_R'].dropna().mean()), 2),
                     'sl_hit_pct':   round(float((dirdf['SL_Hit'] == True).sum() / len(dirdf) * 100), 1),
                     'tp_hit_pct':   round(float((dirdf['TP_Hit'] == True).sum() / len(dirdf) * 100), 1),
+                    'avg_mae_r':    round(float(dirdf['MAE_R'].dropna().mean()), 3) if 'MAE_R' in dirdf.columns else None,
+                    'avg_mfe_r':    round(float(dirdf['MFE_R'].dropna().mean()), 3) if 'MFE_R' in dirdf.columns else None,
+                    'avg_bars_to_tp': round(float(dirdf['Bars_to_TP'].dropna().mean()), 1) if 'Bars_to_TP' in dirdf.columns else None,
                 }
+                # Per-pattern stats
+                tf_stats['patterns'] = {}
+                for pat in dirdf['Pattern'].unique():
+                    ps = dirdf[dirdf['Pattern'] == pat]
+                    ps_ = int((ps['Prediction_Success'] == True).sum())
+                    pf_ = int((ps['Prediction_Success'] == False).sum())
+                    tf_stats['patterns'][pat] = {
+                        'win_rate': round(ps_ / (ps_ + pf_) * 100, 1) if (ps_ + pf_) > 0 else 0,
+                        'total': len(ps),
+                        'avg_max_r': round(float(ps['Max_R'].dropna().mean()), 2) if not ps['Max_R'].dropna().empty else 0,
+                        'sl_hit_pct': round(float((ps['SL_Hit'] == True).sum() / len(ps) * 100), 1),
+                        'tp_hit_pct': round(float((ps['TP_Hit'] == True).sum() / len(ps) * 100), 1),
+                    }
+                # Per-session stats
+                tf_stats['sessions'] = {}
+                for sess in dirdf['Session'].unique():
+                    sd = dirdf[dirdf['Session'] == sess]
+                    ss_ = int((sd['Prediction_Success'] == True).sum())
+                    sf_ = int((sd['Prediction_Success'] == False).sum())
+                    tf_stats['sessions'][sess] = {
+                        'win_rate': round(ss_ / (ss_ + sf_) * 100, 1) if (ss_ + sf_) > 0 else 0,
+                        'signals': len(sd),
+                        'avg_max_r': round(float(sd['Max_R'].dropna().mean()), 2) if not sd['Max_R'].dropna().empty else 0,
+                    }
+                # Cross stats (pattern x session)
+                tf_stats['cross'] = {}
+                for pat in dirdf['Pattern'].unique():
+                    for sess in dirdf['Session'].unique():
+                        cs = dirdf[(dirdf['Pattern'] == pat) & (dirdf['Session'] == sess)]
+                        if len(cs) >= 3:
+                            cs_ = int((cs['Prediction_Success'] == True).sum())
+                            cf_ = int((cs['Prediction_Success'] == False).sum())
+                            tf_stats['cross'][f"{pat}|{sess}"] = {
+                                'win_rate': round(cs_ / (cs_ + cf_) * 100, 1) if (cs_ + cf_) > 0 else 0,
+                                'signals': len(cs),
+                                'avg_max_r': round(float(cs['Max_R'].dropna().mean()), 2) if not cs['Max_R'].dropna().empty else 0,
+                            }
+                # Confluence breakdown
+                if 'Confluence_Score' in dirdf.columns:
+                    tf_stats['confluence'] = {}
+                    for cs_val in sorted(dirdf['Confluence_Score'].dropna().unique()):
+                        csd = dirdf[dirdf['Confluence_Score'] == cs_val]
+                        cs_ = int((csd['Prediction_Success'] == True).sum())
+                        cf_ = int((csd['Prediction_Success'] == False).sum())
+                        tf_stats['confluence'][str(int(cs_val))] = {
+                            'win_rate': round(cs_ / (cs_ + cf_) * 100, 1) if (cs_ + cf_) > 0 else 0,
+                            'signals': len(csd),
+                            'avg_max_r': round(float(csd['Max_R'].dropna().mean()), 2) if not csd['Max_R'].dropna().empty else 0,
+                        }
             combined_stats['timeframes'][tf_label] = tf_stats
         stats_path = os.path.join(out_dir, 'latest_stats_multitf.json')
         os.makedirs(out_dir, exist_ok=True)

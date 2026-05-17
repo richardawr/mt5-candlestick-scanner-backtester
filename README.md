@@ -1,6 +1,8 @@
-# MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester
+# MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v7
 
 A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candlestick patterns, backtest their performance with realistic entry/exit simulation, and run a live scanner that scores and alerts when a new pattern appears.
+
+---
 
 ## Features
 
@@ -8,7 +10,17 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 - **Multi-timeframe backtesting** — backtest all 5 timeframes in a single run with per-TF statistics
 - **Pattern tier system** — patterns auto-classified as A:ELITE, B:TRADEABLE, C:MARGINAL, or D:AVOID based on historical win rate
 - **Session quality classification** — sessions ranked as PRIME, FAVORABLE, NEUTRAL, or UNFAVORABLE
-- **Signal scoring (0-100)** — each live signal scored using pattern tier, session quality, cross-stat edge, and historical win rate
+- **Signal scoring (0-100)** — each live signal scored using TF-specific pattern WR, session gradient, confluence bonus, tier bonus, and MFE bonus
+- **Confluence scoring (0-6 with D1 filter, 0-7 without)** — each backtest detection gets a confluence score based on trend alignment, volume, S/R context, RSI extreme, swing level, and session quality (D1 trend factor is skipped when the D1 trend filter is active, since it's already guaranteed)
+- **Support/Resistance context** — swing high/low detection tags each signal as near_support, near_resistance, at_swing_low, or at_swing_high
+- **RSI context** — RSI(14) computed at each detection; oversold/overbought contributes to confluence
+- **Variable R:R by pattern** — configurable `rr_by_pattern` dict overrides TP multiplier per pattern
+- **MAE/MFE tracking** — Max Adverse Excursion and Max Favorable Excursion in R-multiples per trade
+- **Time-to-SL/TP** — bars until SL or TP hit, enabling trade management optimization
+- **Open-proximity SL/TP resolution** — when both SL and TP are within a candle's range, the level closer to the open price is assumed hit first (replaces the old candle-direction heuristic)
+- **Wilder's ATR smoothing** — standard industry ATR method (alpha = 1/period), matching MT5's built-in indicator
+- **Enriched stats JSON** — `latest_stats_multitf.json` now includes per-TF patterns, sessions, cross-stats, and confluence breakdown (scanner starts instantly, no CSV re-parse)
+- **D1 forward window extended** — D1 forward evaluation increased from 5 to 20 candles (4 trading weeks) for meaningful D1 stats
 - **Historical edge dashboard** — displayed at scanner startup showing top setups, pattern x session combos, Tier D avoid list, and recommended live setups
 - **Per-timeframe WR columns** — pattern table shows win rate broken down by M5/M15/H1/H4/D1 so you can see which TF each pattern performs best on
 - Stop Loss / Take Profit based on **ATR** (configurable multiplier, R:R ratio)
@@ -34,18 +46,20 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 
 2. **Install Python dependencies**:
 
+   ```bash
    pip install MetaTrader5 pandas numpy colorama python-dotenv
-
+   ```
 
 3. Copy `mt5_multitf_pattern_scanner.py` into your project folder.
 
 4. Create a `.env` file in the same directory as the script:
 
+   ```ini
    MT5_PATH=C:\Program Files\Broker\terminal64.exe
    MT5_ACCOUNT=12345678
    MT5_PASSWORD=YourPassword
    MT5_SERVER=YourBrokerServer1
-
+   ```
 
 ---
 
@@ -55,20 +69,25 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 
 **The backtest generates the probability data that powers the live scanner's pattern tiers, signal scores, and historical edge display. Always run the backtest first.**
 
+```bash
 python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14
+```
 
 This scans all 5 timeframes (M5, M15, H1, H4, D1) over the date range and saves:
+
 - Per-TF CSV files (detections, pattern summary, session summary) in `./backtest_results/`
-- `latest_stats_multitf.json` — the stats cache the live scanner loads at startup
+- `latest_stats_multitf.json` — the enriched stats cache the live scanner loads at startup (now includes per-TF patterns, sessions, cross-stats, and confluence breakdown)
 
 With D1 trend filter enabled (default), only signals that aligned with the daily trend are counted. This gives the most accurate stats for live trading.
 
 ### Step 2 — Run the Live Scanner
 
+```bash
 python mt5_multitf_pattern_scanner.py --mode live
-
+```
 
 The scanner starts, loads the backtest stats, and displays the **Historical Setups Dashboard**:
+
 - Overall and per-timeframe win rates
 - Pattern tiers with per-TF WR columns (M5 | M15 | H1 | H4 | D1)
 - Session quality rankings
@@ -77,6 +96,7 @@ The scanner starts, loads the backtest stats, and displays the **Historical Setu
 - Recommended live setups with signal scores
 
 Then it monitors all timeframes and alerts on every new candle close when a pattern is detected, showing:
+
 - Pattern name, tier, direction, session, D1 trend alignment
 - Entry, SL, TP with pip distances and R:R ratio
 - Prob(TP) percentage based on historical SL/TP hit rates
@@ -95,6 +115,7 @@ Press `Ctrl+C` to stop.
 
 Runs a complete backtest across all active timeframes over a specified date range. This is the primary way to generate stats for the live scanner.
 
+```bash
 # All timeframes, Jan 2025 to May 2026
 python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14
 
@@ -106,6 +127,7 @@ python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to
 
 # Without D1 trend filter
 python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --no-d1-trend-filter
+```
 
 Output: `./backtest_results/` (change with `--output`)
 
@@ -113,11 +135,13 @@ Output: `./backtest_results/` (change with `--output`)
 
 Fast snapshot on the most recent N candles (default 500) for a single timeframe.
 
+```bash
 python mt5_multitf_pattern_scanner.py --mode backtest --bars 500
-
+```
 
 ### Live Scanner
 
+```bash
 # All timeframes (default)
 python mt5_multitf_pattern_scanner.py --mode live
 
@@ -126,18 +150,23 @@ python mt5_multitf_pattern_scanner.py --mode live --timeframes H1 H4 D1
 
 # Without D1 trend filter (must match how backtest was run)
 python mt5_multitf_pattern_scanner.py --mode live --no-d1-trend-filter
+```
 
 ### One-Shot Scan
 
 Scan the latest closed candle on all active timeframes and exit.
 
+```bash
 python mt5_multitf_pattern_scanner.py --mode scan
+```
 
 ### Test Sound Alerts
 
 Play both the STRONG BUY and STRONG SELL test beeps to verify audio is working, then exit.
 
+```bash
 python mt5_multitf_pattern_scanner.py --test-sound
+```
 
 ---
 
@@ -157,21 +186,27 @@ The scanner includes Windows-only sound alerts so you don't have to stare at the
 
 When the live scanner starts with sound enabled, you will see:
 
+```
 Sound Alerts: ENABLED | Buy: 1200Hz | Sell: 400Hz | Threshold: 65
 Sound is MUTED — Type "m" + Enter to unmute
+```
 
 ### Toggling mute
 
 Type `m` and press Enter at any time while the scanner is running:
 
+```
 Sound UNMUTED  |  Type 'm' + Enter to toggle
 Sound MUTED    |  Type 'm' + Enter to toggle
+```
 
 ### Testing sound
 
 Before relying on alerts, verify your audio works:
 
+```bash
 python mt5_multitf_pattern_scanner.py --test-sound
+```
 
 This temporarily unmutes, plays both test beeps, then restores the muted state.
 
@@ -190,17 +225,129 @@ These settings are in the `CFG` dict at the top of the script (not exposed as CL
 
 ---
 
+## v7 Enhancements
+
+### Open-Proximity SL/TP Resolution
+
+When both SL and TP fall within a single candle's range, the old heuristic used the candle's direction (bullish/bearish close) to decide which was hit first — this is look-ahead bias. The new heuristic uses **open-proximity**: whichever level is closer to the candle's open price was likely hit first. This is more realistic and corrects a 2-5% WR distortion.
+
+### Confluence Scoring (0-6 with D1 filter, 0-7 without)
+
+Each backtest detection receives a confluence score based on how many confirming factors align:
+
+| Factor | +1 When |
+|---|---|
+| Trend alignment | Local trend agrees with trade direction |
+| D1 trend alignment | Daily trend agrees with trade direction (**skipped when `--d1-trend-filter` is active**) |
+| Volume confirmation | Signal candle has above-average volume |
+| S/R context | Near support (bullish) or near resistance (bearish) |
+| RSI extreme | RSI < 35 for bullish, RSI > 65 for bearish |
+| At swing level | At swing low (bullish) or swing high (bearish) |
+| Session quality | London/NY Overlap or London Open session |
+
+> **Why skip D1 trend when the filter is active?** When `--d1-trend-filter` is on (the default), every signal already has D1 trend alignment guaranteed by the filter. Counting it as a confluence factor would inflate every score by +1 and destroy score differentiation. With the filter active, the effective range is 0-6; without the filter, it's 0-7.
+
+The backtest report and JSON include confluence breakdowns, e.g. "Confluence >= 4: 72% WR vs Confluence 0-2: 48% WR".
+
+### Variable R:R by Pattern
+
+Different patterns have different optimal R:R profiles. Configure overrides in `CFG`:
+
+```python
+'rr_by_pattern': {
+    'Bullish Engulfing': 1.5,    # Quick scalp
+    'Morning Star': 2.5,         # Larger move expected
+    'Three White Soldiers': 3.0, # Strong continuation
+},
+```
+
+When a pattern is listed here, its TP multiplier is overridden. The `RR_Override` column in the detections CSV shows which patterns used overrides.
+
+### MAE/MFE Tracking
+
+Every trade now records:
+
+- **MAE (Max Adverse Excursion)** — worst drawdown in R-multiples before the trade closed
+- **MFE (Max Favorable Excursion)** — best profit in R-multiples before the trade closed
+
+This enables trade management optimization like: "Move SL to breakeven after price reaches 1R" or "If MAE exceeds 0.8R, the trade has low probability of reaching TP".
+
+### Time-to-SL/TP
+
+Each trade records `Bars_to_SL` and `Bars_to_TP` — the number of forward candles until SL or TP was hit. This enables:
+
+- Early exit strategies: "If not in profit after 8 M5 candles, close for breakeven"
+- Trailing stop timing: "Move SL to breakeven after 4 H4 candles"
+
+### Support/Resistance Context
+
+The backtest now detects swing highs and lows (using a 5-bar local extreme window over the last 50 bars) and tags each detection with:
+
+- `Near_Support` — price within 1 ATR of a swing low
+- `Near_Resistance` — price within 1 ATR of a swing high
+- `At_Swing_Low` — candle low is the lowest in the lookback window
+- `At_Swing_High` — candle high is the highest in the lookback window
+
+Patterns near support/resistance have dramatically different win rates.
+
+### RSI Context
+
+RSI(14) is computed at each detection using Wilder's smoothing method. The value is stored in the `RSI` column and contributes to confluence scoring (oversold for bullish, overbought for bearish).
+
+### Enriched Stats JSON
+
+`latest_stats_multitf.json` now includes per-TF breakdown of:
+
+```json
+{
+  "timeframes": {
+    "H4": {
+      "overall": { "win_rate": 53.6, "total_signals": 252, "avg_mae_r": 0.45, "avg_mfe_r": 0.72, "avg_bars_to_tp": 5.2 },
+      "patterns": { "Bullish Engulfing": { "win_rate": 58.2, "total": 312 } },
+      "sessions": { "London/NY Overlap": { "win_rate": 55.1, "signals": 89 } },
+      "cross": { "Bullish Engulfing|London/NY Overlap": { "win_rate": 62.3, "signals": 14 } },
+      "confluence": { "3": { "win_rate": 68.2, "signals": 42 }, "0": { "win_rate": 44.1, "signals": 31 } }
+    }
+  }
+}
+```
+
+The live scanner now loads all data from JSON — **no CSV re-parsing at startup**, so the scanner starts instantly.
+
+### Improved Signal Scoring
+
+The v7 score formula fixes the old formula's problems:
+
+| Factor | v6 (old) | v7 (new) |
+|---|---|---|
+| Base | `WR * confidence` (low-sample patterns got lower base) | Raw WR as base (no multiplication) |
+| Sample size | Confidence multiplier | Sample penalty (-15 for small samples, 0 for 30+) |
+| Session | Binary +10/-10 | Proportional gradient based on session WR |
+| R-factor | `min(amr, 2.0) * 10` (up to +20, too large) | MFE bonus +1/+3 for amr >= 0.5/0.8 |
+| Confluence | Not used | +5 if high-confluence signals have WR >= 55% |
+| TF-specific | Used merged stats | Prefers TF-specific stats when available |
+
+### D1 Forward Window Fix
+
+D1 forward evaluation was only 5 candles (5 trading days). Since D1 ATR-based SL/TP often needs 2-4 weeks to resolve, this produced meaningless D1 stats (avg_max_r = 0.12R was an artifact). Now set to 20 candles (4 trading weeks).
+
+### Wilder's ATR Smoothing
+
+ATR now uses Wilder's exponential smoothing (alpha = 1/period) instead of simple moving average. This matches MT5's built-in ATR indicator and the industry standard. The difference from SMA can be 5-15% on SL/TP sizing.
+
+---
+
 ## How Backtest Stats Flow Into the Live Scanner
 
-1. **Backtest** creates per-TF CSV files (`*_detections.csv`, `*_pattern_summary.csv`, `*_session_summary.csv`) and `latest_stats_multitf.json`
+1. **Backtest** creates per-TF CSV files and the enriched `latest_stats_multitf.json` (includes per-TF patterns, sessions, cross-stats, confluence breakdown)
 2. **Live scanner** calls `load_latest_backtest_stats()` at startup, which:
-   - Reads `latest_stats_multitf.json` for per-TF overall stats
-   - Reads ALL per-TF CSVs to compute merged pattern stats, session stats, and cross-stats (pattern x session)
-   - Caches results for 4 hours (configurable via `stats_cache_hours` in `.env`)
+   - Reads `latest_stats_multitf.json` — if it has per-TF pattern/session/cross data (v7+), loads directly without CSV parsing
+   - Falls back to CSV parsing only for older JSON formats
+   - Caches results for 4 hours (configurable via `stats_cache_hours`)
 3. **Dashboard** displays: overall WR, per-TF WR table, pattern tiers with per-TF columns, session quality, top cross-stats, avoid list, recommended setups
-4. **Each live signal** is enriched with: pattern tier badge, quality summary line, Prob(TP), historical edge breakdown, and signal score
+4. **Each live signal** is enriched with: pattern tier badge, quality summary line, Prob(TP), historical edge breakdown, TF-specific signal score, and confluence context
 
-**Important**: The D1 trend filter setting must match between backtest and live mode. If you run the backtest with `--d1-trend-filter` (default), run live with `--mode live` (also default). If you run backtest with `--no-d1-trend-filter`, run live with `--no-d1-trend-filter`.
+> **Important**: The D1 trend filter setting must match between backtest and live mode. If you run the backtest with `--d1-trend-filter` (default), run live with `--mode live` (also default). If you run backtest with `--no-d1-trend-filter`, run live with `--no-d1-trend-filter`.
 
 ---
 
@@ -230,6 +377,20 @@ These settings are in the `CFG` dict at the top of the script (not exposed as CL
 | `--test-sound` | Play STRONG BUY and STRONG SELL test beeps, then exit | |
 | `--output` | Backtest output directory | `./backtest_results` |
 
+### CFG Config (in script)
+
+These are set in the `CFG` dict at the top of the script:
+
+| Key | Default | Description |
+|---|---|---|
+| `rr_by_pattern` | `{}` | Variable R:R overrides — map pattern name to TP multiplier |
+| `sound_enabled` | `True` | Master switch for sound alerts |
+| `sound_buy_hz` | `1200` | Hz for STRONG BUY triple beep |
+| `sound_sell_hz` | `400` | Hz for STRONG SELL triple beep |
+| `sound_beep_duration` | `150` | Duration per beep in ms |
+| `sound_beep_pause` | `100` | Pause between beeps in ms |
+| `sound_strong_threshold` | `65.0` | Min signal score to trigger sound |
+
 ### Pattern Thresholds
 
 | Argument | Description | Default |
@@ -247,17 +408,20 @@ See `--help` for the full list of arguments.
 
 ---
 
-## Signal Scoring System
+## Signal Scoring System (v7)
 
 Each live signal is scored 0-100 based on:
 
-| Factor | Weight | Description |
-|---|---|---|
-| Pattern win rate | Confidence-weighted | Higher WR patterns score more, with a confidence boost for more signals |
-| Pattern tier | Tier bonus | A:ELITE gets highest bonus, D:AVOID gets penalty |
-| Session quality | Session bonus | PRIME > FAVORABLE > NEUTRAL > UNFAVORABLE |
-| Cross-stat edge | Combo bonus | Pattern x session combos with high WR get a bonus |
-| Avg Max R | Edge factor | Higher average max R-multiple indicates better profit potential |
+| Factor | Description |
+|---|---|
+| Base score | Raw pattern win rate (0-100) |
+| Sample penalty | -15 to 0 based on sample size (0 at 30+ signals, -20 below minimum) |
+| Session gradient | Proportional bonus/penalty based on session WR (e.g., +8 at 60% WR, -8 at 40% WR) |
+| Confluence bonus | +5 if high-confluence signals (score >= 3) have WR >= 55% |
+| Tier bonus | +5 for Tier A, +3 for Tier B |
+| MFE bonus | +1 for avg_max_r >= 0.5, +3 for >= 0.8 |
+
+**Per-TF scoring**: When `tf_label` is available (live scanner), the score prefers TF-specific pattern stats over merged aggregate stats. A Bullish Engulfing on H4 (58% WR) gets a different score than the same pattern on M5 (52% WR).
 
 Patterns below `--min-signal-score` are filtered out (default: 0, i.e. show all).
 
@@ -267,10 +431,10 @@ Patterns below `--min-signal-score` are filtered out (default: 0, i.e. show all)
 
 | Tier | WR Range | Meaning |
 |---|---|---|
-| **A: ELITE** | >= 57% | Highest edge, trade with confidence |
-| **B: TRADEABLE** | 52-57% | Solid edge, reliable setups |
-| **C: MARGINAL** | 45-52% | Use only with strong confluence |
-| **D: AVOID** | < 45% | Negative edge, skip these |
+| **A: ELITE** | >= 58% AND n >= 30 AND avg_max_r >= 0.35 | Highest edge, trade with confidence |
+| **B: TRADEABLE** | >= 50% AND n >= 10 AND avg_max_r >= 0.25 | Solid edge, reliable setups |
+| **C: MARGINAL** | >= 40% | Use only with strong confluence |
+| **D: AVOID** | < 40% OR insufficient data | Negative edge, skip these |
 
 ---
 
@@ -280,11 +444,28 @@ Patterns below `--min-signal-score` are filtered out (default: 0, i.e. show all)
 
 | File | Description |
 |---|---|
-| `EURUSD_{TF}_{date}_to_{date}_detections.csv` | Every pattern detected with entry, SL, TP, outcome, R-levels |
-| `EURUSD_{TF}_{date}_to_{date}_pattern_summary.csv` | Per-pattern stats: WR, signals, avg SL, TP hit %, R-level hit rates |
+| `EURUSD_{TF}_{date}_to_{date}_detections.csv` | Every pattern detected with entry, SL, TP, outcome, R-levels, MAE/MFE, RSI, S/R context, confluence score |
+| `EURUSD_{TF}_{date}_to_{date}_pattern_summary.csv` | Per-pattern stats: WR, signals, SL/TP hit %, R-level hit rates, avg MAE/MFE, avg confluence |
 | `EURUSD_{TF}_{date}_to_{date}_session_summary.csv` | Per-session stats: WR, signals, avg SL, TP hit % |
 | `EURUSD_{TF}_{date}_to_{date}_report.txt` | Human-readable text report |
-| `latest_stats_multitf.json` | Combined per-TF stats cache loaded by the live scanner |
+| `latest_stats_multitf.json` | Enriched per-TF stats cache: overall, patterns, sessions, cross, confluence breakdown |
+
+### New Detection CSV Columns (v7)
+
+| Column | Description |
+|---|---|
+| `Bars_to_SL` | Number of forward candles until SL hit (None if not hit) |
+| `Bars_to_TP` | Number of forward candles until TP hit (None if not hit) |
+| `MAE_R` | Max Adverse Excursion in R-multiples |
+| `MFE_R` | Max Favorable Excursion in R-multiples |
+| `RSI` | RSI(14) value at the signal candle |
+| `Near_Support` | True if price within 1 ATR of a swing low |
+| `Near_Resistance` | True if price within 1 ATR of a swing high |
+| `At_Swing_Low` | True if candle low is the lowest in lookback window |
+| `At_Swing_High` | True if candle high is the highest in lookback window |
+| `Confluence_Score` | 0-7 confluence score |
+| `Confluence_Factors` | Pipe-separated list of contributing factors (e.g., `trend\|d1_trend\|support`) |
+| `RR_Override` | Pattern name if variable R:R was applied, empty string otherwise |
 
 ---
 
