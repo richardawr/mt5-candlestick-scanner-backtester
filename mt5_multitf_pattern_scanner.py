@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v6
+MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v7
 ===============================================================
 Expanded from v5: supports M5, M15, H1, H4, and D1 timeframes for both
 live scanning and backtesting. All parameters are consolidated near the top.
@@ -3505,7 +3505,7 @@ def run_full_backtest(args, cfg=None):
 def parse_args(cfg=None):
     if cfg is None: cfg = CFG
     p = argparse.ArgumentParser(
-        description="MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v6",
+        description="MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v7",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Examples:
