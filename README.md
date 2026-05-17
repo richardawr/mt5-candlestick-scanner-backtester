@@ -70,7 +70,7 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 **The backtest generates the probability data that powers the live scanner's pattern tiers, signal scores, and historical edge display. Always run the backtest first.**
 
 ```bash
-python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-06-01 --to 2026-05-15
 ```
 
 This scans all 5 timeframes (M5, M15, H1, H4, D1) over the date range and saves:
