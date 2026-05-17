@@ -1,4 +1,4 @@
-# MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v7
+# MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v8
 
 A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candlestick patterns, backtest their performance with realistic entry/exit simulation, and run a live scanner that scores and alerts when a new pattern appears.
 
@@ -8,6 +8,11 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 
 - **20+ patterns**: Doji, Hammer, Shooting Star, Engulfing, Morning/Evening Star, Three White Soldiers, Three Black Crows, Marubozu, Harami, Tweezers, Rising/Falling Three Methods, Inverted Hammer, and more
 - **Multi-timeframe backtesting** — backtest all 5 timeframes in a single run with per-TF statistics
+- **Trade management modes** — `fixed` (static SL/TP), `breakeven` (move SL to entry at 1R), `trail` (ATR-based trailing stop), `partial` (close 50% at 1R, trail remainder)
+- **Structure-based SL placement** — place stops at pattern invalidation levels (below Hammer low, below Engulfing candle extreme, etc.) instead of generic ATR offsets
+- **Equity curve & drawdown** — sequential P&L simulation with max drawdown, Sharpe ratio, Calmar ratio, profit factor, and consecutive win/loss streaks
+- **Timeout classification** — choose between `marginal` (Marginal_Win/Loss based on close vs entry) or `expired` (flat 0R for all timeouts) for honest win rate reporting
+- **Multi-symbol watchlist** — scan and backtest multiple symbols (e.g. `--symbols EURUSD GBPUSD USDJPY`)
 - **Pattern tier system** — patterns auto-classified as A:ELITE, B:TRADEABLE, C:MARGINAL, or D:AVOID based on historical win rate
 - **Session quality classification** — sessions ranked as PRIME, FAVORABLE, NEUTRAL, or UNFAVORABLE
 - **Signal scoring (0-100)** — each live signal scored using TF-specific pattern WR, session gradient, confluence bonus, tier bonus, and MFE bonus
@@ -17,9 +22,10 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 - **Variable R:R by pattern** — configurable `rr_by_pattern` dict overrides TP multiplier per pattern
 - **MAE/MFE tracking** — Max Adverse Excursion and Max Favorable Excursion in R-multiples per trade
 - **Time-to-SL/TP** — bars until SL or TP hit, enabling trade management optimization
+- **Exit R tracking** — actual R-multiple at trade exit (accounts for breakeven moves, trailing stops, partial closes)
 - **Open-proximity SL/TP resolution** — when both SL and TP are within a candle's range, the level closer to the open price is assumed hit first (replaces the old candle-direction heuristic)
 - **Wilder's ATR smoothing** — standard industry ATR method (alpha = 1/period), matching MT5's built-in indicator
-- **Enriched stats JSON** — `latest_stats_multitf.json` now includes per-TF patterns, sessions, cross-stats, and confluence breakdown (scanner starts instantly, no CSV re-parse)
+- **Enriched stats JSON** — `latest_stats_multitf.json` now includes per-TF patterns, sessions, cross-stats, confluence breakdown, and equity curve metrics
 - **D1 forward window extended** — D1 forward evaluation increased from 5 to 20 candles (4 trading weeks) for meaningful D1 stats
 - **Historical edge dashboard** — displayed at scanner startup showing top setups, pattern x session combos, Tier D avoid list, and recommended live setups
 - **Per-timeframe WR columns** — pattern table shows win rate broken down by M5/M15/H1/H4/D1 so you can see which TF each pattern performs best on
@@ -70,13 +76,13 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 **The backtest generates the probability data that powers the live scanner's pattern tiers, signal scores, and historical edge display. Always run the backtest first.**
 
 ```bash
-python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-06-01 --to 2026-05-15
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14
 ```
 
 This scans all 5 timeframes (M5, M15, H1, H4, D1) over the date range and saves:
 
 - Per-TF CSV files (detections, pattern summary, session summary) in `./backtest_results/`
-- `latest_stats_multitf.json` — the enriched stats cache the live scanner loads at startup (now includes per-TF patterns, sessions, cross-stats, and confluence breakdown)
+- `latest_stats_multitf.json` — the enriched stats cache the live scanner loads at startup (now includes per-TF patterns, sessions, cross-stats, confluence breakdown, and equity curve metrics)
 
 With D1 trend filter enabled (default), only signals that aligned with the daily trend are counted. This gives the most accurate stats for live trading.
 
@@ -127,6 +133,21 @@ python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to
 
 # Without D1 trend filter
 python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --no-d1-trend-filter
+
+# With breakeven trade management
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --trade-management breakeven
+
+# With trailing stop trade management
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --trade-management trail
+
+# With structure-based SL placement
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --sl-mode structure
+
+# With expired timeout classification (honest win rates)
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --timeout-mode expired
+
+# Multi-symbol backtest
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --symbols EURUSD GBPUSD USDJPY
 ```
 
 Output: `./backtest_results/` (change with `--output`)
@@ -225,6 +246,117 @@ These settings are in the `CFG` dict at the top of the script (not exposed as CL
 
 ---
 
+## v8 Enhancements
+
+### Trade Management Modes
+
+The backtest now supports four trade management modes that control how the stop loss is managed after entry:
+
+| Mode | Behavior |
+|---|---|
+| `fixed` | Static SL/TP — original behavior, no adjustment (default) |
+| `breakeven` | Move SL to entry price (breakeven) when price reaches `breakeven_at_r` R (default: 1.0R) |
+| `trail` | After price reaches `trail_at_r` R (default: 1.5R), move SL to breakeven, then trail by `trail_atr_mult` x ATR behind price |
+| `partial` | Close `partial_close_pct` (default: 50%) of position at `partial_close_r` R (default: 1.0R), move SL to breakeven for remainder, then trail |
+
+All modes also support **time-based stop tightening**: if `time_stop_pct` (default: 0.7 = 70%) of the forward evaluation window elapses without TP, the SL is tightened to breakeven. This only activates in non-`fixed` modes.
+
+```bash
+# Test breakeven mode (move SL to entry at 1R)
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --trade-management breakeven
+
+# Test trailing stop (move to BE at 1.5R, then trail by 1x ATR)
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --trade-management trail
+
+# Test partial close (close 50% at 1R, trail remainder)
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --trade-management partial
+```
+
+New detection columns track trade management outcomes:
+
+| Column | Description |
+|---|---|
+| `Exit_R` | Actual R-multiple at trade exit (accounts for BE moves, trailing, partial closes) |
+| `SL_Moved_to_BE` | True if SL was moved to breakeven during the trade |
+| `Partial_Closed` | True if a partial position was closed |
+| `Remaining_Pct` | Fraction of position still open at exit (1.0 = full, 0.5 = half) |
+
+### Structure-Based SL Placement
+
+Instead of using a generic `candle_low - sl_mult * ATR` for every pattern, structure-based SL places the stop at the pattern's **natural invalidation level** — the price level that would invalidate the pattern's signal:
+
+| Pattern | Bullish SL Placement |
+|---|---|
+| Hammer / Inverted Hammer | Below signal candle's low (the wick IS the pattern) |
+| Morning Star | Below the lowest point of the 3-candle pattern |
+| Three White Soldiers | Below the first candle's low |
+| Bullish Engulfing | Below the engulfing candle's low |
+| Bullish Harami | Below the mother candle's low (previous candle) |
+| Rising Three Methods | Below the first candle's low of the 5-candle pattern |
+| Tweezer Bottoms | Below the lower of the two lows |
+| Default (other) | Below signal candle's low |
+
+Bearish patterns use the mirror (above pattern highs). A small buffer (`sl_structure_buffer_pips`, default: 2 pips) is added below/above the extreme.
+
+```bash
+# Use structure-based SL instead of ATR-based
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --sl-mode structure
+```
+
+Advantages over ATR-based SL:
+- **Tighter stops** — pattern invalidation is often closer than 1.5x ATR, reducing risk per trade
+- **Logical levels** — the stop has a reason (if the Hammer's low breaks, the pattern is invalidated)
+- **Pattern-specific** — each pattern type gets its own optimal SL level
+
+### Equity Curve & Drawdown Analysis
+
+Each backtest timeframe now includes a **Section 8: Equity Curve & Drawdown** in the report, simulating sequential trading with 1R risk per trade and tracking cumulative P&L in R-multiples.
+
+| Metric | Description |
+|---|---|
+| Final Equity | Total cumulative P&L in R-multiples |
+| Max Drawdown | Largest peak-to-trough drawdown (R and %) |
+| Max Consec Wins/Losses | Longest winning and losing streaks |
+| Profit Factor | Gross profit / gross loss |
+| Expectancy | Average R per trade |
+| Sharpe Ratio | Annualised risk-adjusted return (assumes ~4 trades/day, 252 days/year) |
+| Calmar Ratio | Annualised return / max drawdown |
+| Avg Win/Loss R | Average R-multiple for wins and losses separately |
+
+The equity curve uses the `Exit_R` column when available (v8 trade management), giving accurate P&L even with breakeven moves and partial closes. For `fixed` mode, it falls back to deriving R from the outcome type.
+
+### Timeout Classification
+
+By default, trades that reach the end of the forward evaluation window without hitting SL or TP are classified as `Marginal_Win` or `Marginal_Loss` based on whether the close is above or below entry. This inflates win rates by counting tiny gains (e.g. +0.2R) as full "wins".
+
+The `--timeout-mode expired` option reclassifies all timeouts as `Expired` at 0R, giving an **honest win rate** that only counts actual TP vs SL outcomes:
+
+| Mode | Timeout Outcome | Win Rate Meaning |
+|---|---|---|
+| `marginal` (default) | Marginal_Win (+0.1R to +0.5R) or Marginal_Loss (-0.1R to -0.5R) | Includes near-scratches as wins/losses |
+| `expired` | Expired (0R) | Only real TP_Hit vs SL_Hit count |
+
+```bash
+# Honest win rates — timeouts = 0R scratch
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --timeout-mode expired
+```
+
+### Multi-Symbol Watchlist
+
+The scanner and backtester now support scanning multiple symbols:
+
+```bash
+# Backtest multiple symbols
+python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2025-01-01 --to 2026-05-14 --symbols EURUSD GBPUSD USDJPY
+
+# Live scanner with watchlist
+python mt5_multitf_pattern_scanner.py --mode live --symbols EURUSD GBPUSD
+```
+
+By default, only EURUSD is scanned (preserving backward compatibility). The watchlist can also be configured in the `CFG` dict via the `watchlist` key.
+
+---
+
 ## v7 Enhancements
 
 ### Open-Proximity SL/TP Resolution
@@ -306,7 +438,8 @@ RSI(14) is computed at each detection using Wilder's smoothing method. The value
       "patterns": { "Bullish Engulfing": { "win_rate": 58.2, "total": 312 } },
       "sessions": { "London/NY Overlap": { "win_rate": 55.1, "signals": 89 } },
       "cross": { "Bullish Engulfing|London/NY Overlap": { "win_rate": 62.3, "signals": 14 } },
-      "confluence": { "3": { "win_rate": 68.2, "signals": 42 }, "0": { "win_rate": 44.1, "signals": 31 } }
+      "confluence": { "3": { "win_rate": 68.2, "signals": 42 }, "0": { "win_rate": 44.1, "signals": 31 } },
+      "equity": { "final_equity_r": 12.5, "max_dd_r": -4.3, "sharpe": 1.8, "calmar": 2.1 }
     }
   }
 }
@@ -339,7 +472,7 @@ ATR now uses Wilder's exponential smoothing (alpha = 1/period) instead of simple
 
 ## How Backtest Stats Flow Into the Live Scanner
 
-1. **Backtest** creates per-TF CSV files and the enriched `latest_stats_multitf.json` (includes per-TF patterns, sessions, cross-stats, confluence breakdown)
+1. **Backtest** creates per-TF CSV files and the enriched `latest_stats_multitf.json` (includes per-TF patterns, sessions, cross-stats, confluence breakdown, and equity metrics)
 2. **Live scanner** calls `load_latest_backtest_stats()` at startup, which:
    - Reads `latest_stats_multitf.json` — if it has per-TF pattern/session/cross data (v7+), loads directly without CSV parsing
    - Falls back to CSV parsing only for older JSON formats
@@ -358,11 +491,15 @@ ATR now uses Wilder's exponential smoothing (alpha = 1/period) instead of simple
 | Argument | Description | Default |
 |---|---|---|
 | `--symbol` | Trading symbol | `EURUSD` |
+| `--symbols` | Watchlist of symbols to scan/backtest | `EURUSD` |
 | `--timeframes` | Active timeframes | `M5 M15 H1 H4 D1` |
 | `--atr` | ATR period | `14` |
 | `--sl` | Stop loss multiplier (x ATR) | `1.5` |
 | `--tp` | Take profit multiplier (x ATR) | `1.5` |
 | `--forward` | Forward evaluation candles | Scaled per TF |
+| `--sl-mode` | SL placement: `atr` or `structure` | `atr` |
+| `--trade-management` | Trade management: `fixed`, `breakeven`, `trail`, `partial` | `fixed` |
+| `--timeout-mode` | Timeout classification: `marginal` or `expired` | `marginal` |
 | `--d1-trend-filter` | Require D1 SMA trend alignment | `True` |
 | `--no-d1-trend-filter` | Disable D1 trend filter | |
 | `--d1-sma-period` | D1 trend SMA period | `20` |
@@ -384,6 +521,18 @@ These are set in the `CFG` dict at the top of the script:
 | Key | Default | Description |
 |---|---|---|
 | `rr_by_pattern` | `{}` | Variable R:R overrides — map pattern name to TP multiplier |
+| `trade_management_mode` | `fixed` | Trade management mode: fixed, breakeven, trail, partial |
+| `breakeven_at_r` | `1.0` | R level at which SL moves to breakeven (breakeven mode) |
+| `trail_at_r` | `1.5` | R level at which trailing starts (trail mode) |
+| `trail_atr_mult` | `1.0` | Trail SL by this x ATR behind price (trail/partial mode) |
+| `partial_close_r` | `1.0` | R level at which partial position is closed (partial mode) |
+| `partial_close_pct` | `0.5` | Fraction of position to close at partial_close_r (50%) |
+| `time_stop_pct` | `0.7` | Fraction of forward window after which SL tightens to BE (0 = disabled) |
+| `sl_mode` | `atr` | SL placement mode: atr or structure |
+| `sl_structure_buffer_pips` | `2` | Buffer in pips below pattern extreme for structure SL |
+| `timeout_mode` | `marginal` | Timeout classification: marginal or expired |
+| `watchlist` | `['EURUSD']` | Symbols to scan/backtest |
+| `equity_curve_enabled` | `True` | Generate equity curve in full backtest |
 | `sound_enabled` | `True` | Master switch for sound alerts |
 | `sound_buy_hz` | `1200` | Hz for STRONG BUY triple beep |
 | `sound_sell_hz` | `400` | Hz for STRONG SELL triple beep |
@@ -444,13 +593,15 @@ Patterns below `--min-signal-score` are filtered out (default: 0, i.e. show all)
 
 | File | Description |
 |---|---|
-| `EURUSD_{TF}_{date}_to_{date}_detections.csv` | Every pattern detected with entry, SL, TP, outcome, R-levels, MAE/MFE, RSI, S/R context, confluence score |
+| `EURUSD_{TF}_{date}_to_{date}_detections.csv` | Every pattern detected with entry, SL, TP, outcome, R-levels, MAE/MFE, RSI, S/R context, confluence score, Exit_R, trade management flags |
 | `EURUSD_{TF}_{date}_to_{date}_pattern_summary.csv` | Per-pattern stats: WR, signals, SL/TP hit %, R-level hit rates, avg MAE/MFE, avg confluence |
 | `EURUSD_{TF}_{date}_to_{date}_session_summary.csv` | Per-session stats: WR, signals, avg SL, TP hit % |
-| `EURUSD_{TF}_{date}_to_{date}_report.txt` | Human-readable text report |
-| `latest_stats_multitf.json` | Enriched per-TF stats cache: overall, patterns, sessions, cross, confluence breakdown |
+| `EURUSD_{TF}_{date}_to_{date}_report.txt` | Human-readable text report including equity curve & drawdown section |
+| `latest_stats_multitf.json` | Enriched per-TF stats cache: overall, patterns, sessions, cross, confluence, equity metrics |
 
-### New Detection CSV Columns (v7)
+### Detection CSV Columns
+
+#### v7 Columns
 
 | Column | Description |
 |---|---|
@@ -466,6 +617,15 @@ Patterns below `--min-signal-score` are filtered out (default: 0, i.e. show all)
 | `Confluence_Score` | 0-7 confluence score |
 | `Confluence_Factors` | Pipe-separated list of contributing factors (e.g., `trend\|d1_trend\|support`) |
 | `RR_Override` | Pattern name if variable R:R was applied, empty string otherwise |
+
+#### v8 Columns
+
+| Column | Description |
+|---|---|
+| `Exit_R` | Actual R-multiple at trade exit (accounts for BE moves, trailing, partial closes) |
+| `SL_Moved_to_BE` | True if SL was moved to breakeven during the trade |
+| `Partial_Closed` | True if a partial position was closed |
+| `Remaining_Pct` | Fraction of position still open at exit (1.0 = full, 0.5 = half) |
 
 ---
 
