@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v7
+MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v8
 ===============================================================
 Expanded from v5: supports M5, M15, H1, H4, and D1 timeframes for both
 live scanning and backtesting. All parameters are consolidated near the top.
@@ -17,32 +17,53 @@ Sound Alerts (Windows only):
 
 Usage:
     # Live scanner — all 5 timeframes (default)
-    python mt5_multitf_pattern_scanner_v6.py
+    python mt5_multitf_pattern_scanner_v8.py
 
     # Live scanner — specific timeframes only
-    python mt5_multitf_pattern_scanner_v6.py --timeframes M5 H1 H4
+    python mt5_multitf_pattern_scanner_v8.py --timeframes M5 H1 H4
 
     # One-shot scan of latest closed candle on all timeframes
-    python mt5_multitf_pattern_scanner_v6.py --mode scan
+    python mt5_multitf_pattern_scanner_v8.py --mode scan
 
     # Quick backtest (last 500 bars on H4)
-    python mt5_multitf_pattern_scanner_v6.py --mode backtest --bars 500
+    python mt5_multitf_pattern_scanner_v8.py --mode backtest --bars 500
 
     # Full backtest on one timeframe
-    python mt5_multitf_pattern_scanner_v6.py --mode fullbacktest --timeframes H4
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --timeframes H4
 
     # Full backtest on ALL timeframes, date-ranged
-    python mt5_multitf_pattern_scanner_v6.py --mode fullbacktest --from 2024-01-01 --to 2024-12-31
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --from 2024-01-01 --to 2024-12-31
 
     # Full backtest with filters
-    python mt5_multitf_pattern_scanner_v6.py --mode fullbacktest \\
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest \\
         --d1-trend-filter --volume-filter --forward 15 --sl 1.5 --tp 1.5
 
+    # Full backtest with structure-based SL (pattern invalidation levels)
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --sl-mode structure
+
+    # Full backtest with breakeven trade management
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --trade-management breakeven
+
+    # Full backtest with trailing stop management
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --trade-management trail
+
+    # Full backtest with partial close + trailing management
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --trade-management partial
+
+    # Full backtest with expired timeout (0R flat) instead of marginal win/loss
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --timeout-mode expired
+
+    # Multi-symbol watchlist scan
+    python mt5_multitf_pattern_scanner_v8.py --mode scan --symbols EURUSD GBPUSD USDJPY
+
+    # Multi-symbol full backtest
+    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --symbols EURUSD GBPUSD
+
     # Live scanner with custom account sizing
-    python mt5_multitf_pattern_scanner_v6.py --mode live --account-balance 25000 --risk-percent 0.5
+    python mt5_multitf_pattern_scanner_v8.py --mode live --account-balance 25000 --risk-percent 0.5
 
     # Test sound alerts (plays both BUY and SELL test beeps)
-    python mt5_multitf_pattern_scanner_v6.py --test-sound
+    python mt5_multitf_pattern_scanner_v8.py --test-sound
 """
 
 import MetaTrader5 as mt5
@@ -57,7 +78,9 @@ import json
 import glob
 import re
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
 
 # ── Windows sound & keyboard support ────────────────────────────────
 try:
@@ -119,7 +142,7 @@ def C(color, text):
 
 # ── MT5 Credentials (from .env — never hardcode) ───────────────────
 _MT5_PATH     = os.getenv('MT5_PATH',     r"C:\Program Files\Capital Point Trading MT5 Terminal\terminal64.exe")
-_MT5_ACCOUNT  = int(os.getenv('MT5_ACCOUNT', '52598748'))
+_MT5_ACCOUNT  = int(os.getenv('MT5_ACCOUNT', '0'))  # Must be set in .env — 0 will fail login
 _MT5_PASSWORD = os.getenv('MT5_PASSWORD', '')
 _MT5_SERVER   = os.getenv('MT5_SERVER',   'CapitalPointTrading-Demo')
 
@@ -251,6 +274,29 @@ CFG = {
     'sound_beep_duration':   150,    # ms per individual beep
     'sound_beep_pause':      100,    # ms pause between beeps
     'sound_strong_threshold': 65.0,  # signal score >= this = STRONG
+
+    # ── Trade Management (Backtest) ────────────────────────────────
+    'trade_management_mode': 'fixed',  # 'fixed', 'breakeven', 'trail', 'partial'
+    'breakeven_at_r':        1.0,     # Move SL to breakeven when price hits this R level
+    'trail_at_r':            1.5,     # Start trailing stop when price hits this R level
+    'trail_atr_mult':        1.0,     # Trail SL by this multiple of ATR behind price
+    'partial_close_r':       1.0,     # Close partial position at this R level
+    'partial_close_pct':     0.5,     # Fraction of position to close at partial_close_r (0.5 = 50%)
+    'time_stop_pct':         0.7,     # If this fraction of forward_candles elapsed without TP, tighten SL
+                                       # 0 = disabled. E.g. 0.7 with 15 forward = tighten after 10 bars
+
+    # ── SL Placement Mode ──────────────────────────────────────────
+    'sl_mode':               'atr',  # 'atr' (current) or 'structure' (pattern-based)
+    'sl_structure_buffer_pips': 2,   # Buffer in pips below pattern extreme for structure SL
+
+    # ── Timeout Classification ──────────────────────────────────────
+    'timeout_mode':          'marginal',  # 'marginal' (current: Marginal_Win/Loss) or 'expired' (flat 0R)
+
+    # ── Multi-Symbol Watchlist ──────────────────────────────────────
+    'watchlist':             ['EURUSD'],  # Symbols to scan/backtest (default: EURUSD only)
+
+    # ── Equity Curve ────────────────────────────────────────────────
+    'equity_curve_enabled':  True,   # Generate equity curve in full backtest
 }
 
 # ── Derived Paths ───────────────────────────────────────────────────
@@ -358,13 +404,7 @@ def start_sound_key_listener():
     _sound_listener_thread.start()
 
 
-def check_mute_key():
-    """Legacy stub — keyboard is now handled by background thread.
-
-    Kept for API compatibility but does nothing. The background thread
-    started by start_sound_key_listener() handles all key detection.
-    """
-    pass
+# check_mute_key() removed — keyboard handled by background thread (start_sound_key_listener)
 
 
 def test_sound(cfg=None):
@@ -450,17 +490,24 @@ def broker_time(ts):
     return datetime.fromtimestamp(int(ts), tz=None)
 
 
+_log_lock = threading.Lock()
+
 def log_message(msg, cfg=None):
-    """Print and log a message. Strips ANSI colour codes for log file."""
+    """Print and log a message. Strips ANSI colour codes for log file.
+    
+    Thread-safe: uses a lock to prevent interleaved writes from the
+    sound listener thread and the main scanner thread.
+    """
     timestamp = broker_now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{timestamp}] {msg}"
     print(line)
     clean_line = re.sub(r'\x1b\[[0-9;]*m', '', line)
-    try:
-        with open(LOG_FILE, "a", encoding='utf-8') as f:
-            f.write(clean_line + "\n")
-    except Exception:
-        pass
+    with _log_lock:
+        try:
+            with open(LOG_FILE, "a", encoding='utf-8') as f:
+                f.write(clean_line + "\n")
+        except Exception:
+            pass
 
 
 def classify_session(hour, cfg=None):
@@ -524,8 +571,198 @@ def get_atr_tf(tf_label, cfg=None):
     return atr_tf
 
 
+def get_pip_value(symbol=None, cfg=None):
+    """Compute pip value for position sizing based on MT5 symbol info.
+    
+    Falls back to a static lookup table if MT5 is not connected.
+    Returns the value of 1 pip movement per standard lot in account currency.
+    
+    For most forex pairs: pip_value = contract_size * pip_size / (current_rate for cross pairs)
+    For EURUSD standard: 100000 * 0.0001 = 10 USD per pip per lot
+    """
+    if cfg is None: cfg = CFG
+    if symbol is None: symbol = cfg.get('symbol', 'EURUSD')
+    
+    # Try MT5 symbol_info (only works when connected)
+    try:
+        info = mt5.symbol_info(symbol)
+        if info is not None:
+            contract_size = info.trade_contract_size or 100000
+            tick_size = info.trade_tick_size or 0.00001
+            tick_value = info.trade_tick_value or 0
+            if tick_size > 0 and tick_value > 0:
+                # pip_value = value of 1 pip (0.0001 for 5-digit, 0.01 for 3-digit)
+                pip_size = 0.0001 if 'JPY' not in symbol else 0.01
+                return round(tick_value * (pip_size / tick_size), 4)
+    except Exception:
+        pass
+    
+    # Fallback static lookup for common symbols
+    _STATIC_PIP_VALUES = {
+        'EURUSD': 10, 'GBPUSD': 10, 'AUDUSD': 10, 'NZDUSD': 10, 'USDCAD': 7.5,
+        'USDCHF': 11, 'USDJPY': 6.5, 'EURJPY': 6.5, 'GBPJPY': 6.5,
+        'XAUUSD': 1, 'XAGUSD': 5, 'US30': 1, 'NAS100': 1, 'SPX500': 1,
+    }
+    return _STATIC_PIP_VALUES.get(symbol, 10)
+
+
+def compute_structure_sl(pattern_name, direction, rates_or_df, idx, cfg=None):
+    """Compute structure-based SL using the pattern's natural invalidation level.
+    
+    Structure SL places the stop at the pattern's extreme (e.g. below the Hammer's
+    low, below the engulfing candle's low) plus a small buffer, rather than using
+    a fixed ATR multiple. This gives tighter, more logical stops.
+    
+    Returns (sl_price, sl_reason) or None if not applicable.
+    
+    Args:
+        pattern_name: e.g. 'Hammer', 'Bullish Engulfing', 'Morning Star'
+        direction: 'Bullish' or 'Bearish'
+        rates_or_df: structured array (scanner) or DataFrame (backtest)
+        idx: index of the signal candle
+        cfg: configuration dict
+    """
+    if cfg is None: cfg = CFG
+    buffer_pips = cfg.get('sl_structure_buffer_pips', 2)
+    pip_divisor = cfg.get('pip_divisor', 0.0001)
+    buffer = buffer_pips * pip_divisor
+    
+    # For DataFrame, use uppercase column names; for structured arrays, use lowercase
+    is_df = isinstance(rates_or_df, pd.DataFrame)
+    low_key = 'LOW' if is_df else 'low'
+    high_key = 'HIGH' if is_df else 'high'
+    close_key = 'CLOSE' if is_df else 'close'
+    open_key = 'OPEN' if is_df else 'open'
+    
+    try:
+        if is_df:
+            curr = rates_or_df.iloc[idx]
+        else:
+            curr = rates_or_df[idx]
+    except (IndexError, KeyError):
+        return None
+    
+    curr_low = curr[low_key]
+    curr_high = curr[high_key]
+    
+    if direction == 'Bullish':
+        # For bullish patterns, SL goes below the pattern's lowest point
+        if pattern_name in ('Hammer', 'Inverted Hammer'):
+            # Below the signal candle's low (the wick IS the pattern)
+            sl = curr_low - buffer
+            reason = f'Below Hammer low ({curr_low:.5f}) - buffer {buffer_pips}p'
+        elif pattern_name in ('Morning Star',):
+            # Below the lowest point of the 3-candle pattern
+            if idx >= 2:
+                if is_df:
+                    prev2 = rates_or_df.iloc[idx-2]
+                    prev1 = rates_or_df.iloc[idx-1]
+                else:
+                    prev2 = rates_or_df[idx-2]
+                    prev1 = rates_or_df[idx-1]
+                pattern_low = min(prev2[low_key], prev1[low_key], curr_low)
+                sl = pattern_low - buffer
+                reason = f'Below Morning Star low ({pattern_low:.5f}) - buffer {buffer_pips}p'
+            else:
+                sl = curr_low - buffer
+                reason = f'Below candle low ({curr_low:.5f}) - buffer {buffer_pips}p'
+        elif pattern_name in ('Three White Soldiers', 'Rising Three Methods'):
+            # Below the first candle's low of the multi-candle pattern
+            lookback = 4 if 'Three Methods' in pattern_name else 2
+            if idx >= lookback:
+                if is_df:
+                    first = rates_or_df.iloc[idx-lookback]
+                else:
+                    first = rates_or_df[idx-lookback]
+                sl = first[low_key] - buffer
+                reason = f'Below pattern first candle low ({first[low_key]:.5f}) - buffer {buffer_pips}p'
+            else:
+                sl = curr_low - buffer
+                reason = f'Below candle low ({curr_low:.5f}) - buffer {buffer_pips}p'
+        elif 'Bullish Engulfing' in pattern_name:
+            # Below the engulfing candle's low (current candle = engulfing)
+            sl = curr_low - buffer
+            reason = f'Below Engulfing candle low ({curr_low:.5f}) - buffer {buffer_pips}p'
+        elif 'Bullish Harami' in pattern_name:
+            # Below the mother candle's low (previous candle)
+            if idx >= 1:
+                if is_df:
+                    prev = rates_or_df.iloc[idx-1]
+                else:
+                    prev = rates_or_df[idx-1]
+                sl = min(prev[low_key], curr_low) - buffer
+                reason = f'Below Harami pattern low ({min(prev[low_key], curr_low):.5f}) - buffer {buffer_pips}p'
+            else:
+                sl = curr_low - buffer
+                reason = f'Below candle low - buffer {buffer_pips}p'
+        elif pattern_name == 'Tweezer Bottoms':
+            # Below the tweezer lows
+            sl = curr_low - buffer
+            reason = f'Below Tweezer Bottoms low ({curr_low:.5f}) - buffer {buffer_pips}p'
+        else:
+            # Default: below current candle low
+            sl = curr_low - buffer
+            reason = f'Below candle low ({curr_low:.5f}) - buffer {buffer_pips}p'
+        return (round(sl, 5), reason)
+    
+    elif direction == 'Bearish':
+        # For bearish patterns, SL goes above the pattern's highest point
+        if pattern_name in ('Shooting Star', 'Hanging Man'):
+            sl = curr_high + buffer
+            reason = f'Above Shooting Star high ({curr_high:.5f}) + buffer {buffer_pips}p'
+        elif pattern_name in ('Evening Star',):
+            if idx >= 2:
+                if is_df:
+                    prev2 = rates_or_df.iloc[idx-2]
+                    prev1 = rates_or_df.iloc[idx-1]
+                else:
+                    prev2 = rates_or_df[idx-2]
+                    prev1 = rates_or_df[idx-1]
+                pattern_high = max(prev2[high_key], prev1[high_key], curr_high)
+                sl = pattern_high + buffer
+                reason = f'Above Evening Star high ({pattern_high:.5f}) + buffer {buffer_pips}p'
+            else:
+                sl = curr_high + buffer
+                reason = f'Above candle high + buffer {buffer_pips}p'
+        elif pattern_name in ('Three Black Crows', 'Falling Three Methods'):
+            lookback = 4 if 'Three Methods' in pattern_name else 2
+            if idx >= lookback:
+                if is_df:
+                    first = rates_or_df.iloc[idx-lookback]
+                else:
+                    first = rates_or_df[idx-lookback]
+                sl = first[high_key] + buffer
+                reason = f'Above pattern first candle high ({first[high_key]:.5f}) + buffer {buffer_pips}p'
+            else:
+                sl = curr_high + buffer
+                reason = f'Above candle high + buffer {buffer_pips}p'
+        elif 'Bearish Engulfing' in pattern_name:
+            sl = curr_high + buffer
+            reason = f'Above Engulfing candle high ({curr_high:.5f}) + buffer {buffer_pips}p'
+        elif 'Bearish Harami' in pattern_name:
+            if idx >= 1:
+                if is_df:
+                    prev = rates_or_df.iloc[idx-1]
+                else:
+                    prev = rates_or_df[idx-1]
+                sl = max(prev[high_key], curr_high) + buffer
+                reason = f'Above Harami pattern high ({max(prev[high_key], curr_high):.5f}) + buffer {buffer_pips}p'
+            else:
+                sl = curr_high + buffer
+                reason = f'Above candle high + buffer {buffer_pips}p'
+        elif pattern_name == 'Tweezer Tops':
+            sl = curr_high + buffer
+            reason = f'Above Tweezer Tops high ({curr_high:.5f}) + buffer {buffer_pips}p'
+        else:
+            sl = curr_high + buffer
+            reason = f'Above candle high ({curr_high:.5f}) + buffer {buffer_pips}p'
+        return (round(sl, 5), reason)
+    
+    return None
+
+
 # ============================================================
-# PATTERN DETECTION — Structured-array version (scanner)
+# PATTERN DETECTION — Unified (scanner uses fb_detect_* via DataFrame adapter)
 # ============================================================
 
 def detect_trend(rates, cfg=None):
@@ -584,192 +821,68 @@ def compute_atr(rates, cfg=None):
     return atr_val
 
 
-def get_candle_metrics(candle, cfg=None):
-    """Compute metrics for a single candle (structured array row)."""
-    body = abs(candle['close'] - candle['open'])
-    body_sign = 1 if candle['close'] >= candle['open'] else -1
-    range_val = candle['high'] - candle['low']
-    upper_wick = candle['high'] - max(candle['open'], candle['close'])
-    lower_wick = min(candle['open'], candle['close']) - candle['low']
-    body_ratio = body / range_val if range_val > 0 else 0
-    return {
-        'body': body, 'body_sign': body_sign, 'range': range_val,
-        'upper_wick': upper_wick, 'lower_wick': lower_wick, 'body_ratio': body_ratio
-    }
+def mt5_rates_to_df(rates, cfg=None):
+    """Convert MT5 structured array to a minimal DataFrame for unified pattern detection.
+
+    This adapter allows the scanner to use the same fb_detect_* functions as the
+    backtest, eliminating ~400 lines of code duplication. The DataFrame has the
+    same column names (UPPERCASE) as the backtest DataFrame.
+
+    Also pre-computes BODY, BODY_SIGN, RANGE, UPPER_WICK, LOWER_WICK, BODY_RATIO
+    columns so the fb_detect_* functions work without modification.
+
+    Args:
+        rates: MT5 structured array (from mt5.copy_rates_from_pos)
+        cfg: configuration dict
+
+    Returns:
+        pd.DataFrame with UPPER-CASE column names matching backtest format
+    """
+    if rates is None or len(rates) == 0:
+        return pd.DataFrame()
+
+    # Build DataFrame from structured array
+    rows = []
+    for r in rates:
+        rows.append({
+            'time': r['time'],
+            'OPEN': r['open'],
+            'HIGH': r['high'],
+            'LOW': r['low'],
+            'CLOSE': r['close'],
+            'TICKVOL': r['tick_volume'],
+            'VOL': r.get('real_volume', 0),
+            'SPREAD': r.get('spread', 0),
+        })
+    df = pd.DataFrame(rows)
+    df['DATETIME'] = pd.to_datetime(df['time'], unit='s')
+    df['DATE'] = df['DATETIME'].dt.strftime('%Y.%m.%d')
+    df['TIME'] = df['DATETIME'].dt.strftime('%H:%M:%S')
+    df['IN_RANGE'] = True  # All scanner bars are "in range"
+    df['BODY']       = abs(df['CLOSE'] - df['OPEN'])
+    df['BODY_SIGN']  = np.where(df['CLOSE'] >= df['OPEN'], 1, -1)
+    df['RANGE']      = df['HIGH'] - df['LOW']
+    df['UPPER_WICK'] = df['HIGH'] - df[['OPEN', 'CLOSE']].max(axis=1)
+    df['LOWER_WICK'] = df[['OPEN', 'CLOSE']].min(axis=1) - df['LOW']
+    df['BODY_RATIO'] = np.where(df['RANGE'] > 0, df['BODY'] / df['RANGE'], 0)
+    return df
 
 
-def detect_doji(m, cfg=None):
-    if cfg is None: cfg = CFG
-    return m['range'] > 0 and m['body_ratio'] <= cfg['doji_body_ratio']
-
-def detect_spinning_top(m, cfg=None):
-    if cfg is None: cfg = CFG
-    if m['range'] == 0 or m['body'] == 0: return False
-    if m['body_ratio'] > cfg['spinning_top_body_ratio']: return False
-    return m['upper_wick'] >= m['body'] and m['lower_wick'] >= m['body']
-
-def detect_marubozu(m, cfg=None):
-    if cfg is None: cfg = CFG
-    if m['body'] == 0: return False
-    if m['body_ratio'] < cfg['long_candle_ratio']: return False
-    return (m['upper_wick'] <= m['body'] * cfg['marubozu_wick_ratio'] and
-            m['lower_wick'] <= m['body'] * cfg['marubozu_wick_ratio'])
-
-def detect_hammer(m, trend, cfg=None):
-    if cfg is None: cfg = CFG
-    if trend not in ('downtrend', 'ranging'): return False
-    if m['body'] == 0: return False
-    return (m['lower_wick'] >= m['body'] * cfg['hammer_lower_wick_ratio'] and
-            m['upper_wick'] <= m['body'] * cfg['hammer_upper_wick_ratio'])
-
-def detect_inverted_hammer(m, trend, cfg=None):
-    if cfg is None: cfg = CFG
-    if trend not in ('downtrend', 'ranging'): return False
-    if m['body'] == 0: return False
-    return (m['upper_wick'] >= m['body'] * cfg['hammer_lower_wick_ratio'] and
-            m['lower_wick'] <= m['body'] * cfg['hammer_upper_wick_ratio'])
-
-def detect_shooting_star(m, trend, cfg=None):
-    if cfg is None: cfg = CFG
-    if trend not in ('uptrend', 'ranging'): return False
-    if m['body'] == 0: return False
-    return (m['upper_wick'] >= m['body'] * cfg['hammer_lower_wick_ratio'] and
-            m['lower_wick'] <= m['body'] * cfg['hammer_upper_wick_ratio'])
-
-def detect_hanging_man(m, trend, cfg=None):
-    if cfg is None: cfg = CFG
-    if trend not in ('uptrend', 'ranging'): return False
-    if m['body'] == 0: return False
-    return (m['lower_wick'] >= m['body'] * cfg['hammer_lower_wick_ratio'] and
-            m['upper_wick'] <= m['body'] * cfg['hammer_upper_wick_ratio'])
-
-def detect_near_engulfing_full(curr, prev, cm, pm, cfg=None):
-    if cfg is None: cfg = CFG
-    if cm['body'] == 0 or pm['body'] == 0: return None
-    tol = cfg.get('engulf_tolerance_pips', 2.0) * 0.0001
-    if cm['body_sign'] == 1 and pm['body_sign'] == -1:
-        if not (curr['open'] <= prev['close'] and curr['close'] >= prev['open']):
-            if curr['open'] <= prev['close'] + tol and curr['close'] >= prev['open'] - tol:
-                return 'Near Bullish Engulfing'
-    if cm['body_sign'] == -1 and pm['body_sign'] == 1:
-        if not (curr['open'] >= prev['close'] and curr['close'] <= prev['open']):
-            if curr['open'] >= prev['close'] - tol and curr['close'] <= prev['open'] + tol:
-                return 'Near Bearish Engulfing'
-    return None
-
-def detect_engulfing_full(curr, prev, cm, pm, cfg=None):
-    if cm['body'] == 0 or pm['body'] == 0: return None
-    if cm['body_sign'] == 1 and pm['body_sign'] == -1:
-        if curr['open'] <= prev['close'] and curr['close'] >= prev['open']:
-            return 'Bullish Engulfing'
-    if cm['body_sign'] == -1 and pm['body_sign'] == 1:
-        if curr['open'] >= prev['close'] and curr['close'] <= prev['open']:
-            return 'Bearish Engulfing'
-    return None
-
-def detect_harami_full(curr, prev, cm, pm, cfg=None):
-    if cfg is None: cfg = CFG
-    if cm['body'] == 0 or pm['body'] == 0: return None
-    if pm['body_ratio'] < cfg['long_candle_ratio'] * 0.8: return None
-    ch = max(curr['open'], curr['close']); cl = min(curr['open'], curr['close'])
-    ph = max(prev['open'], prev['close']); pl = min(prev['open'], prev['close'])
-    if ch <= ph and cl >= pl:
-        if pm['body_sign'] == -1 and cm['body_sign'] == 1: return 'Bullish Harami'
-        if pm['body_sign'] == 1 and cm['body_sign'] == -1: return 'Bearish Harami'
-    return None
-
-def detect_morning_star(rates, idx, ml, cfg=None):
-    if cfg is None: cfg = CFG
-    if idx < 2: return False
-    f, s, t = ml[idx-2], ml[idx-1], ml[idx]
-    if f['body_sign'] != -1 or f['body_ratio'] < cfg['long_candle_ratio']: return False
-    if s['body_ratio'] > cfg['small_candle_ratio'] + 0.1: return False
-    if t['body_sign'] != 1 or t['body_ratio'] < cfg['long_candle_ratio'] * 0.7: return False
-    return rates[idx]['close'] > (rates[idx-2]['open'] + rates[idx-2]['close']) / 2
-
-def detect_evening_star(rates, idx, ml, cfg=None):
-    if cfg is None: cfg = CFG
-    if idx < 2: return False
-    f, s, t = ml[idx-2], ml[idx-1], ml[idx]
-    if f['body_sign'] != 1 or f['body_ratio'] < cfg['long_candle_ratio']: return False
-    if s['body_ratio'] > cfg['small_candle_ratio'] + 0.1: return False
-    if t['body_sign'] != -1 or t['body_ratio'] < cfg['long_candle_ratio'] * 0.7: return False
-    return rates[idx]['close'] < (rates[idx-2]['open'] + rates[idx-2]['close']) / 2
-
-def detect_three_white_soldiers(rates, idx, ml, cfg=None):
-    if idx < 2: return False
-    m1, m2, m3 = ml[idx-2], ml[idx-1], ml[idx]
-    if m1['body_sign'] != 1 or m2['body_sign'] != 1 or m3['body_sign'] != 1: return False
-    if m1['body_ratio'] < 0.5 or m2['body_ratio'] < 0.5 or m3['body_ratio'] < 0.5: return False
-    return rates[idx]['close'] > rates[idx-1]['close'] > rates[idx-2]['close']
-
-def detect_three_black_crows(rates, idx, ml, cfg=None):
-    if idx < 2: return False
-    m1, m2, m3 = ml[idx-2], ml[idx-1], ml[idx]
-    if m1['body_sign'] != -1 or m2['body_sign'] != -1 or m3['body_sign'] != -1: return False
-    if m1['body_ratio'] < 0.5 or m2['body_ratio'] < 0.5 or m3['body_ratio'] < 0.5: return False
-    return rates[idx]['close'] < rates[idx-1]['close'] < rates[idx-2]['close']
-
-def detect_tweezer(rates, idx, cfg=None):
-    if cfg is None: cfg = CFG
-    if idx < 1: return None
-    prev, curr = rates[idx-1], rates[idx]
-    tol = cfg['tweezer_tolerance_pips'] * 0.0001
-    trend = detect_trend(rates[:idx+1], cfg)
-    if abs(prev['high'] - curr['high']) <= tol and trend in ('uptrend', 'ranging'):
-        return 'Tweezer Tops'
-    if abs(prev['low'] - curr['low']) <= tol and trend in ('downtrend', 'ranging'):
-        return 'Tweezer Bottoms'
-    return None
-
-def detect_rising_three_methods(rates, idx, ml, cfg=None):
-    if cfg is None: cfg = CFG
-    if idx < 4: return False
-    fm = ml[idx-4]
-    if fm['body_sign'] != 1 or fm['body_ratio'] < cfg['long_candle_ratio']: return False
-    first = rates[idx-4]
-    for i in range(1, 4):
-        c = rates[idx-4+i]; cm = ml[idx-4+i]
-        if cm['body_ratio'] > cfg['small_candle_ratio'] + 0.15: return False
-        if c['high'] > first['high'] or c['low'] < first['low']: return False
-    fm5 = ml[idx]
-    if fm5['body_sign'] != 1 or fm5['body_ratio'] < cfg['long_candle_ratio'] * 0.7: return False
-    return rates[idx]['close'] > first['close']
-
-def detect_falling_three_methods(rates, idx, ml, cfg=None):
-    if cfg is None: cfg = CFG
-    if idx < 4: return False
-    fm = ml[idx-4]
-    if fm['body_sign'] != -1 or fm['body_ratio'] < cfg['long_candle_ratio']: return False
-    first = rates[idx-4]
-    for i in range(1, 4):
-        c = rates[idx-4+i]; cm = ml[idx-4+i]
-        if cm['body_ratio'] > cfg['small_candle_ratio'] + 0.15: return False
-        if c['high'] > first['high'] or c['low'] < first['low']: return False
-    fm5 = ml[idx]
-    if fm5['body_sign'] != -1 or fm5['body_ratio'] < cfg['long_candle_ratio'] * 0.7: return False
-    return rates[idx]['close'] < first['close']
-
-
-# ============================================================
-# VOLUME CONFIRMATION — Structured-array version
-# ============================================================
-
-def check_volume_confirmed(rates, idx, cfg=None):
-    """Check if the signal candle's tick_volume confirms the pattern."""
-    if cfg is None: cfg = CFG
-    if not cfg.get('volume_filter', False):
-        return True
-    vol_period = cfg.get('volume_ma_period', 20)
-    vol_thresh = cfg.get('volume_threshold', 1.0)
-    start = max(0, idx - vol_period)
-    vols = [r['tick_volume'] for r in rates[start:idx+1]]
-    if len(vols) < 2:
-        return True
-    avg_vol = np.mean(vols[:-1])
-    if avg_vol == 0:
-        return True
-    return vols[-1] >= vol_thresh * avg_vol
+# ── Scanner-specific detect_* functions removed (v8) ────────────
+# Pattern detection is now unified: scan_patterns() converts MT5
+# structured arrays to DataFrames and uses the fb_detect_* functions
+# that are also used by the backtest. This eliminates ~400 lines of
+# code duplication and ensures scanner/backtest always use identical
+# detection logic.
+#
+# Removed functions:
+#   get_candle_metrics, detect_doji, detect_spinning_top, detect_marubozu,
+#   detect_hammer, detect_inverted_hammer, detect_shooting_star,
+#   detect_hanging_man, detect_near_engulfing_full, detect_engulfing_full,
+#   detect_harami_full, detect_morning_star, detect_evening_star,
+#   detect_three_white_soldiers, detect_three_black_crows, detect_tweezer,
+#   detect_rising_three_methods, detect_falling_three_methods,
+#   check_volume_confirmed
 
 
 # ============================================================
@@ -1569,13 +1682,20 @@ def scan_patterns(rates, cfg=None, d1_rates=None, tf_label='H4', htf_atr_rates=N
     """
     if cfg is None:
         cfg = CFG
-    if len(rates) < 6:
+    # ── Use DataFrame-based detection (unified with backtest) ────────
+    scan_df = mt5_rates_to_df(rates, cfg)
+    if len(scan_df) < 6:
         return []
-    ml = [get_candle_metrics(r, cfg) for r in rates]
-    idx = len(rates) - 1
-    curr = rates[idx]; cm = ml[idx]
+    idx = len(scan_df) - 1
+    row = scan_df.iloc[idx]
+    cm = {
+        'body': row['BODY'], 'body_sign': row['BODY_SIGN'], 'range': row['RANGE'],
+        'upper_wick': row['UPPER_WICK'], 'lower_wick': row['LOWER_WICK'],
+        'body_ratio': row['BODY_RATIO']
+    }
+    curr = {'open': row['OPEN'], 'high': row['HIGH'], 'low': row['LOW'], 'close': row['CLOSE'], 'time': row['time']}
     patterns = []
-    trend = detect_trend(rates[:idx+1], cfg)
+    trend = detect_trend(scan_df[:idx+1], cfg)
 
     # Use higher-timeframe ATR if configured and rates provided
     atr_src = get_atr_tf(tf_label, cfg)
@@ -1593,7 +1713,17 @@ def scan_patterns(rates, cfg=None, d1_rates=None, tf_label='H4', htf_atr_rates=N
         hour = int(_ct) % 24
     session = classify_session(hour, cfg)
 
-    vol_confirmed = check_volume_confirmed(rates, idx, cfg)
+    # Volume confirmation (DataFrame-based, matching backtest logic)
+    vol_confirmed = True
+    if cfg.get('volume_filter', False) and len(scan_df) > 0:
+        vol_ma_period = cfg.get('volume_ma_period', 20)
+        vol_thresh = cfg.get('volume_threshold', 1.0)
+        start = max(0, idx - vol_ma_period)
+        vols = scan_df.iloc[start:idx+1]['TICKVOL'].values
+        if len(vols) >= 2:
+            avg_vol = np.mean(vols[:-1])
+            if avg_vol > 0:
+                vol_confirmed = vols[-1] >= vol_thresh * avg_vol
 
     # D1 trend filter
     d1_trend = 'N/A'
@@ -1603,46 +1733,47 @@ def scan_patterns(rates, cfg=None, d1_rates=None, tf_label='H4', htf_atr_rates=N
         d1_close = d1_rates[-1]['close']
         d1_trend = 'uptrend' if d1_close > d1_sma else ('downtrend' if d1_close < d1_sma else 'ranging')
 
-    # Single-candle patterns
-    if detect_doji(cm, cfg):          patterns.append({'name': 'Doji',               'category': 'Neutral',           'direction': 'Neutral'})
-    if detect_spinning_top(cm, cfg):  patterns.append({'name': 'Spinning Top',        'category': 'Neutral',           'direction': 'Neutral'})
-    if detect_marubozu(cm, cfg):
+    # Single-candle patterns (using unified fb_detect_* functions)
+    if fb_detect_doji(scan_df, idx, cfg):          patterns.append({'name': 'Doji',               'category': 'Neutral',           'direction': 'Neutral'})
+    if fb_detect_spinning_top(scan_df, idx, cfg):  patterns.append({'name': 'Spinning Top',        'category': 'Neutral',           'direction': 'Neutral'})
+    if fb_detect_marubozu(scan_df, idx, cfg):
         d = 'Bullish' if cm['body_sign'] == 1 else 'Bearish'
         patterns.append({'name': f'Marubozu ({d})', 'category': f'{d} Continuation', 'direction': d})
-    if detect_hammer(cm, trend, cfg):          patterns.append({'name': 'Hammer',          'category': 'Bullish Reversal', 'direction': 'Bullish'})
-    if detect_inverted_hammer(cm, trend, cfg): patterns.append({'name': 'Inverted Hammer', 'category': 'Bullish Reversal', 'direction': 'Bullish'})
-    if detect_shooting_star(cm, trend, cfg):   patterns.append({'name': 'Shooting Star',   'category': 'Bearish Reversal', 'direction': 'Bearish'})
-    if detect_hanging_man(cm, trend, cfg):     patterns.append({'name': 'Hanging Man',      'category': 'Bearish Reversal', 'direction': 'Bearish'})
+    if fb_detect_hammer(scan_df, idx, cfg):          patterns.append({'name': 'Hammer',          'category': 'Bullish Reversal', 'direction': 'Bullish'})
+    if fb_detect_inverted_hammer(scan_df, idx, cfg): patterns.append({'name': 'Inverted Hammer', 'category': 'Bullish Reversal', 'direction': 'Bullish'})
+    if fb_detect_shooting_star(scan_df, idx, cfg):   patterns.append({'name': 'Shooting Star',   'category': 'Bearish Reversal', 'direction': 'Bearish'})
+    if fb_detect_hanging_man(scan_df, idx, cfg):     patterns.append({'name': 'Hanging Man',      'category': 'Bearish Reversal', 'direction': 'Bearish'})
 
     # Two-candle patterns
-    if idx >= 1:
-        prev = rates[idx-1]; pm = ml[idx-1]
-        e = detect_engulfing_full(curr, prev, cm, pm, cfg)
-        if e:
-            d = 'Bullish' if 'Bullish' in e else 'Bearish'
-            patterns.append({'name': e, 'category': f'{d} Reversal', 'direction': d})
-        ne = detect_near_engulfing_full(curr, prev, cm, pm, cfg)
-        if ne:
-            d = 'Bullish' if 'Bullish' in ne else 'Bearish'
-            patterns.append({'name': ne, 'category': f'{d} Reversal', 'direction': d})
-        h = detect_harami_full(curr, prev, cm, pm, cfg)
-        if h:
-            d = 'Bullish' if 'Bullish' in h else 'Bearish'
-            patterns.append({'name': h, 'category': f'{d} Reversal', 'direction': d})
-        tw = detect_tweezer(rates, idx, cfg)
-        if tw:
-            d = 'Bearish' if 'Tops' in tw else 'Bullish'
-            patterns.append({'name': tw, 'category': f'{d} Reversal', 'direction': d})
+    eng = fb_detect_engulfing(scan_df, idx, cfg)
+    if eng:
+        d = 'Bullish' if 'Bullish' in eng else 'Bearish'
+        patterns.append({'name': eng, 'category': f'{d} Reversal', 'direction': d})
+
+    ne = fb_detect_near_engulfing(scan_df, idx, cfg)
+    if ne:
+        d = 'Bullish' if 'Bullish' in ne else 'Bearish'
+        patterns.append({'name': ne, 'category': f'{d} Reversal', 'direction': d})
+
+    har = fb_detect_harami(scan_df, idx, cfg)
+    if har:
+        d = 'Bullish' if 'Bullish' in har else 'Bearish'
+        patterns.append({'name': har, 'category': f'{d} Reversal', 'direction': d})
+
+    tw = fb_detect_tweezer(scan_df, idx, cfg)
+    if tw:
+        d = 'Bearish' if 'Tops' in tw else 'Bullish'
+        patterns.append({'name': tw, 'category': f'{d} Reversal', 'direction': d})
 
     # Three-candle patterns
-    if detect_morning_star(rates, idx, ml, cfg):         patterns.append({'name': 'Morning Star',        'category': 'Bullish Reversal', 'direction': 'Bullish'})
-    if detect_evening_star(rates, idx, ml, cfg):         patterns.append({'name': 'Evening Star',        'category': 'Bearish Reversal', 'direction': 'Bearish'})
-    if detect_three_white_soldiers(rates, idx, ml, cfg): patterns.append({'name': 'Three White Soldiers', 'category': 'Bullish Reversal', 'direction': 'Bullish'})
-    if detect_three_black_crows(rates, idx, ml, cfg):    patterns.append({'name': 'Three Black Crows',   'category': 'Bearish Reversal', 'direction': 'Bearish'})
+    if fb_detect_morning_star(scan_df, idx, cfg):         patterns.append({'name': 'Morning Star',        'category': 'Bullish Reversal', 'direction': 'Bullish'})
+    if fb_detect_evening_star(scan_df, idx, cfg):         patterns.append({'name': 'Evening Star',        'category': 'Bearish Reversal', 'direction': 'Bearish'})
+    if fb_detect_three_white_soldiers(scan_df, idx, cfg): patterns.append({'name': 'Three White Soldiers', 'category': 'Bullish Reversal', 'direction': 'Bullish'})
+    if fb_detect_three_black_crows(scan_df, idx, cfg):    patterns.append({'name': 'Three Black Crows',   'category': 'Bearish Reversal', 'direction': 'Bearish'})
 
     # Five-candle patterns
-    if detect_rising_three_methods(rates, idx, ml, cfg):  patterns.append({'name': 'Rising Three Methods',  'category': 'Bullish Continuation', 'direction': 'Bullish'})
-    if detect_falling_three_methods(rates, idx, ml, cfg): patterns.append({'name': 'Falling Three Methods', 'category': 'Bearish Continuation', 'direction': 'Bearish'})
+    if fb_detect_rising_three_methods(scan_df, idx, cfg):  patterns.append({'name': 'Rising Three Methods',  'category': 'Bullish Continuation', 'direction': 'Bullish'})
+    if fb_detect_falling_three_methods(scan_df, idx, cfg): patterns.append({'name': 'Falling Three Methods', 'category': 'Bearish Continuation', 'direction': 'Bearish'})
 
     patterns = deduplicate_patterns(patterns, cfg)
 
@@ -1660,16 +1791,36 @@ def scan_patterns(rates, cfg=None, d1_rates=None, tf_label='H4', htf_atr_rates=N
 
     sl_mult = cfg['sl_multiplier']
     tp_mult = cfg['tp_multiplier']
+    sl_mode = cfg.get('sl_mode', 'atr')
     for pat in patterns:
         d = pat['direction']
+        sl_reason = ''
+        
+        # Structure-based SL: use pattern's natural invalidation level
+        struct_sl = None
+        if sl_mode == 'structure' and d in ('Bullish', 'Bearish'):
+            struct_result = compute_structure_sl(pat['name'], d, rates, idx, cfg)
+            if struct_result is not None:
+                struct_sl, sl_reason = struct_result
+        
         if d == 'Bullish':
-            pat['sl'] = round(curr['low'] - sl_mult * atr, 5)
+            if struct_sl is not None:
+                pat['sl'] = struct_sl
+            else:
+                pat['sl'] = round(curr['low'] - sl_mult * atr, 5)
             risk = curr['close'] - pat['sl']
             pat['tp'] = round(curr['close'] + risk * (tp_mult / sl_mult), 5)
+            if sl_reason:
+                pat['sl_reason'] = sl_reason
         elif d == 'Bearish':
-            pat['sl'] = round(curr['high'] + sl_mult * atr, 5)
+            if struct_sl is not None:
+                pat['sl'] = struct_sl
+            else:
+                pat['sl'] = round(curr['high'] + sl_mult * atr, 5)
             risk = pat['sl'] - curr['close']
             pat['tp'] = round(curr['close'] - risk * (tp_mult / sl_mult), 5)
+            if sl_reason:
+                pat['sl_reason'] = sl_reason
         else:
             pat['sl'] = round(curr['low'] - sl_mult * atr, 5)
             risk_bull = curr['close'] - pat['sl']
@@ -1866,9 +2017,9 @@ def format_pattern_output(candle, patterns, cfg=None, stats=None, tf_label='H4')
         balance  = cfg.get('account_balance', 100000)
         if pat.get('sl_dist_pips') and pat['sl_dist_pips'] > 0:
             risk_amount = balance * risk_pct / 100.0
-            pip_value   = 10  # EURUSD std lot
+            pip_value   = get_pip_value(cfg.get('symbol', 'EURUSD'), cfg)
             lots        = round(risk_amount / (pat['sl_dist_pips'] * pip_value), 2)
-            lines.append(f"  Position Size ({risk_pct:.1f}% of ${balance:,.0f}): {C('cyan', f'{lots:.2f} lots')}")
+            lines.append(f"  Position Size ({risk_pct:.1f}% of ${balance:,.0f}): {C('cyan', f'{lots:.2f} lots')} (pip val: {pip_value})")
 
         lines.append(f"  {'─' * 40}")
     lines.append(C(tf_color, "=" * 80))
@@ -2196,13 +2347,21 @@ def fb_detect_falling_three_methods(df, idx, cfg=None):
 
 def simulate_forward_evaluation(df, idx, direction, sl_price, tp_price, r_levels,
                                  forward_candles, cfg=None, fill_price=None):
-    """Forward evaluation with intra-candle path simulation to avoid look-ahead bias.
-
-    Includes:
-      - Open-proximity heuristic for SL/TP ambiguity (whichever level is closer
-        to the candle open is assumed to be hit first)
-      - Time-to-SL/TP tracking (bars until SL or TP hit)
-      - MAE (Max Adverse Excursion) and MFE (Max Favorable Excursion) in R-multiples
+    """Forward evaluation with trade management and intra-candle path simulation.
+    
+    Supports four trade management modes via cfg['trade_management_mode']:
+      'fixed'     — Static SL/TP (original behavior, default)
+      'breakeven' — Move SL to entry (breakeven) when price hits breakeven_at_r R
+      'trail'     — After trail_at_r R hit, trail SL by trail_atr_mult × ATR behind price
+      'partial'   — Close partial_close_pct at partial_close_r R, trail the rest
+    
+    Also supports time-based stop tightening: if time_stop_pct fraction of forward_candles
+    elapsed without TP, SL is tightened to breakeven.
+    
+    Returns dict with: sl_hit, tp_hit, outcome, max_r, r_hits, fill_price,
+                       entry_filled, bars_to_sl, bars_to_tp, mae_r, mfe_r,
+                       exit_r (R-multiple at actual exit), sl_moved_to_be,
+                       partial_closed, remaining_pct
     """
     if cfg is None: cfg = CFG
     max_r_levels = cfg.get('max_r_levels', 5)
@@ -2213,20 +2372,36 @@ def simulate_forward_evaluation(df, idx, direction, sl_price, tp_price, r_levels
     outcome = 'Timeout'
     bars_to_sl = None
     bars_to_tp = None
-    mae_r = 0.0   # Max Adverse Excursion in R (worst drawdown)
-    mfe_r = 0.0   # Max Favorable Excursion in R (best profit)
+    mae_r = 0.0
+    mfe_r = 0.0
+    exit_r = 0.0         # R-multiple at actual exit
+    sl_moved_to_be = False
+    partial_closed = False
+    remaining_pct = 1.0  # Fraction of position still open
+
+    # Trade management config
+    tm_mode = cfg.get('trade_management_mode', 'fixed')
+    be_at_r = cfg.get('breakeven_at_r', 1.0)
+    trail_at_r = cfg.get('trail_at_r', 1.5)
+    trail_atr_mult = cfg.get('trail_atr_mult', 1.0)
+    partial_r = cfg.get('partial_close_r', 1.0)
+    partial_pct = cfg.get('partial_close_pct', 0.5)
+    time_stop_pct = cfg.get('time_stop_pct', 0.7)
+    time_stop_bar = int(forward_candles * time_stop_pct) if time_stop_pct > 0 else 0
 
     if direction not in ('Bullish', 'Bearish'):
         return {'sl_hit': None, 'tp_hit': None, 'outcome': 'N/A',
                 'max_r': None, 'r_hits': r_hits, 'fill_price': None,
                 'entry_filled': True, 'bars_to_sl': None, 'bars_to_tp': None,
-                'mae_r': None, 'mfe_r': None}
+                'mae_r': None, 'mfe_r': None, 'exit_r': None,
+                'sl_moved_to_be': False, 'partial_closed': False, 'remaining_pct': 1.0}
 
     if idx + 1 >= len(df):
         return {'sl_hit': None, 'tp_hit': None, 'outcome': 'Timeout',
                 'max_r': 0, 'r_hits': r_hits, 'fill_price': None,
                 'entry_filled': False, 'bars_to_sl': None, 'bars_to_tp': None,
-                'mae_r': 0.0, 'mfe_r': 0.0}
+                'mae_r': 0.0, 'mfe_r': 0.0, 'exit_r': 0.0,
+                'sl_moved_to_be': False, 'partial_closed': False, 'remaining_pct': 1.0}
 
     entry = fill_price if fill_price is not None else df.iloc[idx]['CLOSE']
     risk = abs(entry - sl_price) if sl_price is not None else 0.001
@@ -2239,7 +2414,17 @@ def simulate_forward_evaluation(df, idx, direction, sl_price, tp_price, r_levels
         return {'sl_hit': None, 'tp_hit': None, 'outcome': 'Timeout',
                 'max_r': 0, 'r_hits': r_hits, 'fill_price': None,
                 'entry_filled': False, 'bars_to_sl': None, 'bars_to_tp': None,
-                'mae_r': 0.0, 'mfe_r': 0.0}
+                'mae_r': 0.0, 'mfe_r': 0.0, 'exit_r': 0.0,
+                'sl_moved_to_be': False, 'partial_closed': False, 'remaining_pct': 1.0}
+
+    # Active SL (may move during trade)
+    active_sl = sl_price
+    # Breakeven price (entry price, used when SL moves to BE)
+    be_price = entry
+    # Track whether trailing has started
+    trailing_active = False
+    # Track whether breakeven has been triggered (for partial mode)
+    be_triggered = False
 
     bar_count = 0
     stopped = False
@@ -2250,48 +2435,117 @@ def simulate_forward_evaluation(df, idx, direction, sl_price, tp_price, r_levels
         fc_high = fc['HIGH']; fc_low = fc['LOW']
         fc_open = fc['OPEN']; fc_close = fc['CLOSE']
 
-        # Track MAE/MFE before checking stops (intra-bar extremes)
+        # Current favorable R (for trade management decisions)
         if direction == 'Bullish':
-            adverse = entry - fc_low    # how far price went against us
-            favorable = fc_high - entry  # how far price went in our favor
+            current_favorable_r = (fc_high - entry) / risk
+        else:
+            current_favorable_r = (entry - fc_low) / risk
+
+        # ── Trade management: adjust SL before checking hits ──────────
+        if tm_mode == 'breakeven' and not sl_moved_to_be:
+            if current_favorable_r >= be_at_r:
+                active_sl = be_price
+                sl_moved_to_be = True
+
+        elif tm_mode == 'trail':
+            # First move to breakeven at trail_at_r
+            if not sl_moved_to_be and current_favorable_r >= trail_at_r:
+                active_sl = be_price
+                sl_moved_to_be = True
+                trailing_active = True
+            # Then trail by ATR
+            if trailing_active and 'ATR' in fc.index and not pd.isna(fc.get('ATR', None)):
+                trail_dist = trail_atr_mult * fc['ATR']
+                if direction == 'Bullish':
+                    new_sl = fc_high - trail_dist
+                    if new_sl > active_sl:
+                        active_sl = new_sl
+                else:
+                    new_sl = fc_low + trail_dist
+                    if new_sl < active_sl:
+                        active_sl = new_sl
+
+        elif tm_mode == 'partial':
+            # Close partial position at partial_r
+            if not partial_closed and current_favorable_r >= partial_r:
+                partial_closed = True
+                remaining_pct = 1.0 - partial_pct
+                # Move SL to breakeven for the remainder
+                if not sl_moved_to_be:
+                    active_sl = be_price
+                    sl_moved_to_be = True
+            # After partial close, start trailing
+            if partial_closed and 'ATR' in fc.index and not pd.isna(fc.get('ATR', None)):
+                trail_dist = trail_atr_mult * fc['ATR']
+                if direction == 'Bullish':
+                    new_sl = fc_high - trail_dist
+                    if new_sl > active_sl:
+                        active_sl = new_sl
+                else:
+                    new_sl = fc_low + trail_dist
+                    if new_sl < active_sl:
+                        active_sl = new_sl
+
+        # Time-based stop tightening: if X% of forward window elapsed, tighten SL
+        # Only applies when trade management mode is not 'fixed'
+        if tm_mode != 'fixed' and time_stop_pct > 0 and bar_count >= time_stop_bar and not sl_moved_to_be:
+            active_sl = be_price
+            sl_moved_to_be = True
+
+        # ── Track MAE/MFE before checking stops ──────────────────────
+        if direction == 'Bullish':
+            adverse = entry - fc_low
+            favorable = fc_high - entry
         else:
             adverse = fc_high - entry
             favorable = entry - fc_low
         mae_r = max(mae_r, adverse / risk)
         mfe_r = max(mfe_r, favorable / risk)
 
-        sl_in_range = (fc_low  <= sl_price if direction == 'Bullish' else fc_high >= sl_price)
+        # ── Check SL/TP using the (possibly adjusted) active_sl ──────
+        sl_in_range = (fc_low  <= active_sl if direction == 'Bullish' else fc_high >= active_sl)
         tp_in_range = (fc_high >= tp_price if direction == 'Bullish' else fc_low  <= tp_price)
 
         if sl_in_range and tp_in_range:
-            # Both SL and TP within candle range — use open-proximity heuristic:
-            # whichever level is closer to the open price was likely hit first.
-            sl_dist = abs(fc_open - sl_price)
+            sl_dist = abs(fc_open - active_sl)
             tp_dist = abs(fc_open - tp_price)
             if tp_dist <= sl_dist:
-                # TP was likely hit first (it's closer to open)
                 tp_hit = True; outcome = 'TP_Hit'
                 bars_to_tp = bar_count
-                # Check R-levels up to current MFE
                 for r in range(1, max_r_levels+1):
                     rv = r_levels.get(f'R{r}')
                     if rv is not None:
                         if (direction == 'Bullish' and fc_high >= rv) or (direction == 'Bearish' and fc_low <= rv):
                             r_hits[f'R{r}_Hit'] = True; highest_r = max(highest_r, r)
-                # SL was also hit on this bar (but after TP)
                 sl_hit = True
                 bars_to_sl = bar_count
+                # Exit R for TP
+                if direction == 'Bullish':
+                    exit_r = (tp_price - entry) / risk
+                else:
+                    exit_r = (entry - tp_price) / risk
+                exit_r *= remaining_pct  # Scale by remaining position
             else:
-                # SL was likely hit first (it's closer to open)
                 sl_hit = True; outcome = 'SL_Hit'
                 bars_to_sl = bar_count
-                # TP was also hit on this bar (but after SL)
                 tp_hit = True
                 bars_to_tp = bar_count
+                # Exit R for SL (with adjusted SL)
+                if direction == 'Bullish':
+                    exit_r = (active_sl - entry) / risk
+                else:
+                    exit_r = (entry - active_sl) / risk
+                exit_r *= remaining_pct
             stopped = True
         elif sl_in_range:
             sl_hit = True; outcome = 'SL_Hit'; stopped = True
             bars_to_sl = bar_count
+            # Calculate exit R with adjusted SL
+            if direction == 'Bullish':
+                exit_r = (active_sl - entry) / risk
+            else:
+                exit_r = (entry - active_sl) / risk
+            exit_r *= remaining_pct
         elif tp_in_range:
             tp_hit = True; outcome = 'TP_Hit'
             bars_to_tp = bar_count
@@ -2301,6 +2555,11 @@ def simulate_forward_evaluation(df, idx, direction, sl_price, tp_price, r_levels
                     if (direction == 'Bullish' and fc_high >= rv) or (direction == 'Bearish' and fc_low <= rv):
                         r_hits[f'R{r}_Hit'] = True; highest_r = max(highest_r, r)
             stopped = True
+            if direction == 'Bullish':
+                exit_r = (tp_price - entry) / risk
+            else:
+                exit_r = (entry - tp_price) / risk
+            exit_r *= remaining_pct
         else:
             for r in range(1, max_r_levels+1):
                 rv = r_levels.get(f'R{r}')
@@ -2313,17 +2572,31 @@ def simulate_forward_evaluation(df, idx, direction, sl_price, tp_price, r_levels
             r_hits[f'R{r}_Hit'] = False
 
     if not stopped and len(future) > 0:
-        final_close = future.iloc[-1]['CLOSE']
-        benchmark   = fill_price if fill_price is not None else df.iloc[idx]['CLOSE']
-        if direction == 'Bullish':
-            outcome = 'Marginal_Win' if final_close > benchmark else 'Marginal_Loss'
-        elif direction == 'Bearish':
-            outcome = 'Marginal_Win' if final_close < benchmark else 'Marginal_Loss'
+        if cfg.get('timeout_mode', 'marginal') == 'expired':
+            outcome = 'Expired'
+        else:
+            final_close = future.iloc[-1]['CLOSE']
+            benchmark   = fill_price if fill_price is not None else df.iloc[idx]['CLOSE']
+            if direction == 'Bullish':
+                outcome = 'Marginal_Win' if final_close > benchmark else 'Marginal_Loss'
+            elif direction == 'Bearish':
+                outcome = 'Marginal_Win' if final_close < benchmark else 'Marginal_Loss'
+        # Calculate exit R for timeout
+        if len(future) > 0:
+            final_close = future.iloc[-1]['CLOSE']
+            if direction == 'Bullish':
+                exit_r = (final_close - entry) / risk
+            else:
+                exit_r = (entry - final_close) / risk
+            exit_r *= remaining_pct
 
     return {'sl_hit': sl_hit, 'tp_hit': tp_hit, 'outcome': outcome,
             'max_r': highest_r, 'r_hits': r_hits, 'fill_price': None,
             'entry_filled': True, 'bars_to_sl': bars_to_sl, 'bars_to_tp': bars_to_tp,
-            'mae_r': round(mae_r, 3), 'mfe_r': round(mfe_r, 3)}
+            'mae_r': round(mae_r, 3), 'mfe_r': round(mfe_r, 3),
+            'exit_r': round(exit_r, 3),
+            'sl_moved_to_be': sl_moved_to_be, 'partial_closed': partial_closed,
+            'remaining_pct': remaining_pct}
 
 
 # ============================================================
@@ -2631,12 +2904,27 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
         effective_tp_mult = tp_mult
         rr_ratio = tp_mult / sl_mult
 
+    # SL placement: ATR-based (default) or structure-based
+    sl_mode = cfg.get('sl_mode', 'atr')
+    struct_sl = None
+    sl_reason = ''
+    if sl_mode == 'structure' and direction in ('Bullish', 'Bearish'):
+        struct_result = compute_structure_sl(pattern_name, direction, df, idx, cfg)
+        if struct_result is not None:
+            struct_sl, sl_reason = struct_result
+    
     if direction == 'Bullish':
-        sl   = row['LOW'] - sl_mult * current_atr
+        if struct_sl is not None:
+            sl = struct_sl
+        else:
+            sl   = row['LOW'] - sl_mult * current_atr
         risk = row['CLOSE'] - sl
         tp   = row['CLOSE'] + risk * rr_ratio
     elif direction == 'Bearish':
-        sl   = row['HIGH'] + sl_mult * current_atr
+        if struct_sl is not None:
+            sl = struct_sl
+        else:
+            sl   = row['HIGH'] + sl_mult * current_atr
         risk = sl - row['CLOSE']
         tp   = row['CLOSE'] - risk * rr_ratio
     else:
@@ -2748,6 +3036,7 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
     r_hits = {f'R{r}_Hit': None for r in range(1, max_r_levels+1)}
     bars_to_sl = None; bars_to_tp = None
     mae_r = 0.0; mfe_r = 0.0
+    exit_r = 0.0; sl_moved_to_be = False; partial_closed = False; remaining_pct = 1.0
 
     if no_fill:
         outcome = 'No_Fill'; entry_filled = False
@@ -2758,8 +3047,12 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
         outcome = fwd['outcome']; max_r = fwd['max_r']; r_hits = fwd['r_hits']
         bars_to_sl = fwd.get('bars_to_sl'); bars_to_tp = fwd.get('bars_to_tp')
         mae_r = fwd.get('mae_r', 0.0); mfe_r = fwd.get('mfe_r', 0.0)
+        exit_r = fwd.get('exit_r', 0.0)
+        sl_moved_to_be = fwd.get('sl_moved_to_be', False)
+        partial_closed = fwd.get('partial_closed', False)
+        remaining_pct = fwd.get('remaining_pct', 1.0)
         prediction_success = (True  if outcome in ('TP_Hit', 'Marginal_Win') else
-                              False if outcome in ('SL_Hit', 'Marginal_Loss', 'No_Fill') else None)
+                              False if outcome in ('SL_Hit', 'Marginal_Loss', 'No_Fill', 'Expired') else None)
 
     result = {
         'Timeframe': tf_label,
@@ -2793,6 +3086,10 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
         'Confluence_Score': confluence_score,
         'Confluence_Factors': '|'.join(confluence_factors) if confluence_factors else '',
         'RR_Override': pattern_name if pattern_name in rr_overrides else '',
+        'Exit_R': exit_r,
+        'SL_Moved_to_BE': sl_moved_to_be,
+        'Partial_Closed': partial_closed,
+        'Remaining_Pct': remaining_pct,
     }
     for r in range(1, max_r_levels+1):
         rk = f'R{r}'
@@ -2801,6 +3098,150 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
         result[f'R{r}_Pips'] = (round(r * risk / pip_divisor, 1)
                                 if r_levels.get(rk) is not None and risk is not None else None)
     return result
+
+
+def compute_equity_curve(detections, cfg=None):
+    """Compute equity curve and drawdown statistics from backtest detections.
+    
+    Simulates sequential trading with fixed position sizing (1R risk per trade),
+    tracking cumulative P&L in R-multiples, then derives key metrics:
+      - Cumulative P&L curve
+      - Max drawdown (R and %)
+      - Sharpe ratio (annualised, assuming 252 trading days)
+      - Calmar ratio (annualised return / max drawdown)
+      - Max consecutive wins/losses
+      - Profit factor (gross profit / gross loss)
+      - Expectancy (average R per trade)
+    
+    Returns dict with equity curve data and statistics, or None if insufficient data.
+    """
+    if cfg is None: cfg = CFG
+    if not detections or len(detections) < 5:
+        return None
+    
+    det_df = pd.DataFrame(detections)
+    directional = det_df[det_df['Direction'] != 'Neutral'].copy()
+    if len(directional) < 5:
+        return None
+    
+    # Sort by DateTime to ensure sequential order
+    if 'DateTime' in directional.columns:
+        directional = directional.sort_values('DateTime').reset_index(drop=True)
+    
+    # Determine R-multiple for each trade
+    # Use exit_r if available (v8 trade management), else derive from outcome
+    r_multiples = []
+    for _, row in directional.iterrows():
+        if 'Exit_R' in row and not pd.isna(row.get('Exit_R')):
+            r_mult = float(row['Exit_R'])
+        elif row.get('Outcome') == 'TP_Hit':
+            r_mult = float(row.get('TP_R_Multiple', 1.0))
+        elif row.get('Outcome') == 'SL_Hit':
+            # Check if SL was moved to breakeven
+            if row.get('SL_Moved_to_BE', False):
+                r_mult = 0.0
+            else:
+                r_mult = -1.0
+        elif row.get('Outcome') == 'Marginal_Win':
+            r_mult = 0.1  # Small positive
+        elif row.get('Outcome') == 'Marginal_Loss':
+            r_mult = -0.1  # Small negative
+        elif row.get('Outcome') == 'Expired':
+            r_mult = 0.0
+        elif row.get('Outcome') == 'No_Fill':
+            r_mult = 0.0
+        else:
+            r_mult = 0.0  # Timeout
+        r_multiples.append(r_mult)
+    
+    directional = directional.copy()
+    directional['R_Multiple'] = r_multiples
+    
+    # Cumulative equity curve (starting at 0)
+    directional['Cumulative_R'] = directional['R_Multiple'].cumsum()
+    
+    # Drawdown calculation
+    directional['Peak_R'] = directional['Cumulative_R'].cummax()
+    directional['Drawdown_R'] = directional['Cumulative_R'] - directional['Peak_R']
+    max_dd_r = directional['Drawdown_R'].min()
+    # Max drawdown percentage (relative to peak equity)
+    peak_at_dd = directional.loc[directional['Drawdown_R'].idxmin(), 'Peak_R'] if max_dd_r < 0 else 0
+    max_dd_pct = abs(max_dd_r / peak_at_dd * 100) if peak_at_dd > 0 else 0
+    
+    # Consecutive streaks
+    wins = (directional['R_Multiple'] > 0).values
+    losses = (directional['R_Multiple'] < 0).values
+    
+    max_consec_wins = 0
+    max_consec_losses = 0
+    current_streak = 0
+    current_type = None
+    for w, l in zip(wins, losses):
+        if w:
+            if current_type == 'win':
+                current_streak += 1
+            else:
+                current_type = 'win'
+                current_streak = 1
+            max_consec_wins = max(max_consec_wins, current_streak)
+        elif l:
+            if current_type == 'loss':
+                current_streak += 1
+            else:
+                current_type = 'loss'
+                current_streak = 1
+            max_consec_losses = max(max_consec_losses, current_streak)
+        else:
+            current_streak = 0
+            current_type = None
+    
+    # Profit factor
+    gross_profit = directional.loc[directional['R_Multiple'] > 0, 'R_Multiple'].sum()
+    gross_loss = abs(directional.loc[directional['R_Multiple'] < 0, 'R_Multiple'].sum())
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+    
+    # Expectancy
+    expectancy = directional['R_Multiple'].mean()
+    
+    # Sharpe ratio (annualised)
+    if directional['R_Multiple'].std() > 0:
+        # Assume ~4 trades per day average across all TFs
+        trades_per_year = 252 * 4
+        sharpe = (directional['R_Multiple'].mean() / directional['R_Multiple'].std()) * np.sqrt(trades_per_year)
+    else:
+        sharpe = 0.0
+    
+    # Calmar ratio (annualised return / max drawdown)
+    total_trades = len(directional)
+    annual_return = directional['Cumulative_R'].iloc[-1] * (252 * 4 / max(total_trades, 1))
+    calmar = annual_return / abs(max_dd_r) if max_dd_r != 0 else 0.0
+    
+    # Win/loss statistics
+    n_wins = int((directional['R_Multiple'] > 0).sum())
+    n_losses = int((directional['R_Multiple'] < 0).sum())
+    avg_win = directional.loc[directional['R_Multiple'] > 0, 'R_Multiple'].mean() if n_wins > 0 else 0
+    avg_loss = directional.loc[directional['R_Multiple'] < 0, 'R_Multiple'].mean() if n_losses > 0 else 0
+    
+    return {
+        'total_trades': total_trades,
+        'n_wins': n_wins,
+        'n_losses': n_losses,
+        'final_equity_r': round(directional['Cumulative_R'].iloc[-1], 2),
+        'max_dd_r': round(max_dd_r, 2),
+        'max_dd_pct': round(max_dd_pct, 1),
+        'max_consec_wins': max_consec_wins,
+        'max_consec_losses': max_consec_losses,
+        'profit_factor': round(profit_factor, 2),
+        'expectancy': round(expectancy, 3),
+        'sharpe': round(sharpe, 2),
+        'calmar': round(calmar, 2),
+        'avg_win_r': round(avg_win, 3) if avg_win else 0,
+        'avg_loss_r': round(avg_loss, 3) if avg_loss else 0,
+        'gross_profit_r': round(gross_profit, 2),
+        'gross_loss_r': round(gross_loss, 2),
+        'equity_curve': directional['Cumulative_R'].tolist(),
+        'drawdown_curve': directional['Drawdown_R'].tolist(),
+    }
 
 
 # ============================================================
@@ -2830,12 +3271,20 @@ def fb_generate_report(detections, df, symbol, tf_label, cfg=None):
     else:
         L(f"ATR Source TF     : {tf_label} (native)")
     L(f"SL Multiplier     : {cfg.get('sl_multiplier', 1.5)} x ATR")
+    L(f"SL Mode           : {cfg.get('sl_mode', 'atr')}")
     L(f"TP R:R            : 1:{cfg.get('tp_multiplier', 1.5)/cfg.get('sl_multiplier', 1.5):.1f}")
     L(f"Forward Eval      : {forward_candles} candles = {forward_candles * tf_minutes // 60:.0f} hours")
     L(f"D1 Trend Filter   : {cfg.get('d1_trend_filter', False)}")
     L(f"Volume Filter     : {cfg.get('volume_filter', False)}")
     L(f"Verify Entry      : {cfg.get('verify_entry', True)}")
+    L(f"Trade Management  : {cfg.get('trade_management_mode', 'fixed')}")
+    if cfg.get('trade_management_mode', 'fixed') != 'fixed':
+        L(f"  Breakeven at    : {cfg.get('breakeven_at_r', 1.0)}R")
+        L(f"  Trail at        : {cfg.get('trail_at_r', 1.5)}R x {cfg.get('trail_atr_mult', 1.0)} ATR")
+        L(f"  Partial close   : {cfg.get('partial_close_pct', 0.5)*100:.0f}% at {cfg.get('partial_close_r', 1.0)}R")
+        L(f"  Time stop       : {cfg.get('time_stop_pct', 0.7)*100:.0f}% of forward window")
     L(f"Deduplicate       : {cfg.get('deduplicate_signals', True)}")
+    L(f"Timeout Mode      : {cfg.get('timeout_mode', 'marginal')}")
     L("")
 
     if not detections:
@@ -2874,7 +3323,7 @@ def fb_generate_report(detections, df, symbol, tf_label, cfg=None):
           f"  {pat:30s} | {total:6d} | {s:5d} | {f_:5d} | {wr:5.1f}% | {slp:5.1f}% | {tpp:5.1f}% | N/A")
 
     L(""); L("-" * 120); L("SECTION 4: OUTCOME BREAKDOWN"); L("-" * 120)
-    for outcome_name in ['TP_Hit', 'SL_Hit', 'Marginal_Win', 'Marginal_Loss', 'Timeout', 'No_Fill']:
+    for outcome_name in ['TP_Hit', 'SL_Hit', 'Marginal_Win', 'Marginal_Loss', 'Expired', 'Timeout', 'No_Fill']:
         cnt = int((directional['Outcome'] == outcome_name).sum()) if len(directional) > 0 else 0
         pct = round(cnt / len(directional) * 100, 1) if len(directional) > 0 else 0
         L(f"  {outcome_name:20s} | {cnt:6d} | {pct:5.1f}%")
@@ -2921,6 +3370,25 @@ def fb_generate_report(detections, df, symbol, tf_label, cfg=None):
                 hc = int((directional[col] == True).sum()); ec = int(directional[col].notna().sum())
                 L(f"  R{r} hit rate              : {round(hc/ec*100,1) if ec>0 else 0:.1f}%")
 
+    # ── Equity Curve & Drawdown ──
+    if cfg.get('equity_curve_enabled', True) and len(directional) >= 5:
+        eq = compute_equity_curve(detections, cfg)
+        if eq:
+            L(""); L("-" * 120); L("SECTION 8: EQUITY CURVE & DRAWDOWN"); L("-" * 120)
+            L(f"  Total Trades         : {eq['total_trades']}")
+            L(f"  Final Equity         : {eq['final_equity_r']:.2f}R")
+            L(f"  Max Drawdown         : {eq['max_dd_r']:.2f}R ({eq['max_dd_pct']:.1f}%)")
+            L(f"  Max Consec Wins      : {eq['max_consec_wins']}")
+            L(f"  Max Consec Losses    : {eq['max_consec_losses']}")
+            L(f"  Profit Factor        : {eq['profit_factor']:.2f}")
+            L(f"  Expectancy           : {eq['expectancy']:.3f}R per trade")
+            L(f"  Avg Win              : {eq['avg_win_r']:.3f}R")
+            L(f"  Avg Loss             : {eq['avg_loss_r']:.3f}R")
+            L(f"  Gross Profit         : {eq['gross_profit_r']:.2f}R")
+            L(f"  Gross Loss           : {eq['gross_loss_r']:.2f}R")
+            L(f"  Sharpe Ratio         : {eq['sharpe']:.2f}")
+            L(f"  Calmar Ratio         : {eq['calmar']:.2f}")
+
     L(""); L("=" * 120)
     return "\n".join(lines)
 
@@ -2934,10 +3402,16 @@ def run_scanner(cfg=None):
     if cfg is None: cfg = CFG
     active_tfs = cfg.get('active_timeframes', ['M5', 'M15', 'H1', 'H4', 'D1'])
     symbol     = cfg['symbol']
+    watchlist  = cfg.get('watchlist', [symbol])
+    if len(watchlist) > 1:
+        log_message(f"Multi-symbol watchlist: {', '.join(watchlist)}", cfg)
 
     log_message(C('cyan', '=' * 70), cfg)
-    log_message(C('bold', f"  {symbol} MULTI-TIMEFRAME PATTERN SCANNER v7 — STARTING"), cfg)
+    log_message(C('bold', f"  {symbol} MULTI-TIMEFRAME PATTERN SCANNER v8 — STARTING"), cfg)
     log_message(C('cyan', '=' * 70), cfg)
+    watchlist_display = ', '.join(cfg.get('watchlist', [symbol]))
+    if len(cfg.get('watchlist', [])) > 1:
+        log_message(f"  Watchlist: {watchlist_display} (live scanner: {symbol})", cfg)
     log_message(f"Active timeframes: {C('yellow', ', '.join(active_tfs))}", cfg)
     sl_str = f"{cfg['sl_multiplier']}x ATR"
     log_message(f"SL: {C('red', sl_str)} | TP R:R = 1:{cfg['tp_multiplier']/cfg['sl_multiplier']:.1f}", cfg)
@@ -2963,6 +3437,9 @@ def run_scanner(cfg=None):
         log_message(f"Sound is {C('red', 'MUTED')} — Type {C('yellow', '\"m\" + Enter')} to unmute", cfg)
     elif not _WINSOUND:
         log_message(C('yellow', "Sound Alerts: DISABLED (winsound not available — Windows only)"), cfg)
+
+    if len(cfg.get('watchlist', [])) > 1:
+        log_message(f"Watchlist: {C('yellow', ', '.join(cfg['watchlist']))} (live scanner uses first symbol; use --mode scan for multi-symbol)", cfg)
 
     # Start background keyboard listener for mute toggle
     if cfg.get('sound_enabled', True) and _WINSOUND:
@@ -3244,7 +3721,7 @@ def run_full_backtest(args, cfg=None):
     out_dir    = args.output
 
     print("=" * 70)
-    print(f"  {symbol} MULTI-TIMEFRAME BACKTESTER v7")
+    print(f"  {symbol} MULTI-TIMEFRAME BACKTESTER v8")
     print("=" * 70)
     print(f"  Timeframes : {', '.join(active_tfs)}")
     print(f"  From       : {args.date_from}")
@@ -3257,6 +3734,8 @@ def run_full_backtest(args, cfg=None):
         atr_map_display.append(f"{tf}→{atr_src}" if atr_src != tf else tf)
     print(f"  ATR Source : {', '.join(atr_map_display)}")
     print(f"  SL/TP      : {cfg.get('sl_multiplier', 1.5)}x / {cfg.get('tp_multiplier', 1.5)}x ATR")
+    print(f"  SL Mode    : {cfg.get('sl_mode', 'atr')}")
+    print(f"  Trade Mgmt : {cfg.get('trade_management_mode', 'fixed')}")
     print(f"  Output     : {out_dir}")
     print()
 
@@ -3354,6 +3833,8 @@ def run_full_backtest(args, cfg=None):
                     'At_Support_Pct': round((ds['Near_Support'] == True).sum() / max(len(ds),1) * 100, 1) if 'Near_Support' in ds.columns else None,
                     'At_Resistance_Pct': round((ds['Near_Resistance'] == True).sum() / max(len(ds),1) * 100, 1) if 'Near_Resistance' in ds.columns else None,
                     'Avg_Confluence': round(ds['Confluence_Score'].dropna().mean(), 1) if 'Confluence_Score' in ds.columns and not ds['Confluence_Score'].dropna().empty else None,
+                    'Avg_Exit_R': round(ds['Exit_R'].dropna().mean(), 3) if 'Exit_R' in ds.columns and not ds['Exit_R'].dropna().empty else None,
+                    'BE_Move_Pct': round((ds['SL_Moved_to_BE'] == True).sum() / max(len(ds),1) * 100, 1) if 'SL_Moved_to_BE' in ds.columns else None,
                 })
                 for r in range(1, max_r_levels+1):
                     col = f'R{r}_Hit'
@@ -3434,6 +3915,8 @@ def run_full_backtest(args, cfg=None):
                     'avg_mae_r':    round(float(dirdf['MAE_R'].dropna().mean()), 3) if 'MAE_R' in dirdf.columns else None,
                     'avg_mfe_r':    round(float(dirdf['MFE_R'].dropna().mean()), 3) if 'MFE_R' in dirdf.columns else None,
                     'avg_bars_to_tp': round(float(dirdf['Bars_to_TP'].dropna().mean()), 1) if 'Bars_to_TP' in dirdf.columns else None,
+                    'avg_exit_r': round(float(dirdf['Exit_R'].dropna().mean()), 3) if 'Exit_R' in dirdf.columns else None,
+                    'be_move_pct': round(float((dirdf['SL_Moved_to_BE'] == True).sum() / max(len(dirdf),1) * 100), 1) if 'SL_Moved_to_BE' in dirdf.columns else None,
                 }
                 # Per-pattern stats
                 tf_stats['patterns'] = {}
@@ -3484,6 +3967,23 @@ def run_full_backtest(args, cfg=None):
                             'signals': len(csd),
                             'avg_max_r': round(float(csd['Max_R'].dropna().mean()), 2) if not csd['Max_R'].dropna().empty else 0,
                         }
+                # Equity curve
+                if cfg.get('equity_curve_enabled', True):
+                    eq = compute_equity_curve(dets, cfg)
+                    if eq:
+                        tf_stats['equity'] = {
+                            'final_equity_r': eq['final_equity_r'],
+                            'max_dd_r': eq['max_dd_r'],
+                            'max_dd_pct': eq['max_dd_pct'],
+                            'max_consec_wins': eq['max_consec_wins'],
+                            'max_consec_losses': eq['max_consec_losses'],
+                            'profit_factor': eq['profit_factor'],
+                            'expectancy': eq['expectancy'],
+                            'sharpe': eq['sharpe'],
+                            'calmar': eq['calmar'],
+                            'avg_win_r': eq['avg_win_r'],
+                            'avg_loss_r': eq['avg_loss_r'],
+                        }
             combined_stats['timeframes'][tf_label] = tf_stats
         stats_path = os.path.join(out_dir, 'latest_stats_multitf.json')
         os.makedirs(out_dir, exist_ok=True)
@@ -3505,27 +4005,27 @@ def run_full_backtest(args, cfg=None):
 def parse_args(cfg=None):
     if cfg is None: cfg = CFG
     p = argparse.ArgumentParser(
-        description="MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v7",
+        description="MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v8",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Examples:
   # Live scanner — all timeframes
-  python mt5_multitf_pattern_scanner_v6.py
+  python mt5_multitf_pattern_scanner_v8.py
 
   # Live scanner — specific timeframes
-  python mt5_multitf_pattern_scanner_v6.py --timeframes M5 H1 H4
+  python mt5_multitf_pattern_scanner_v8.py --timeframes M5 H1 H4
 
   # One-shot scan
-  python mt5_multitf_pattern_scanner_v6.py --mode scan
+  python mt5_multitf_pattern_scanner_v8.py --mode scan
 
   # Quick backtest (500 bars) on H4 only
-  python mt5_multitf_pattern_scanner_v6.py --mode backtest --bars 500 --timeframes H4
+  python mt5_multitf_pattern_scanner_v8.py --mode backtest --bars 500 --timeframes H4
 
   # Full backtest on all TFs, 2024 full year
-  python mt5_multitf_pattern_scanner_v6.py --mode fullbacktest --from 2024-01-01 --to 2024-12-31
+  python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --from 2024-01-01 --to 2024-12-31
 
   # Full backtest with filters on H4 only
-  python mt5_multitf_pattern_scanner_v6.py --mode fullbacktest --timeframes H4 \\
+  python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --timeframes H4 \\
       --d1-trend-filter --volume-filter --forward 15
         """
     )
@@ -3546,6 +4046,15 @@ Examples:
 
     # Core parameters
     p.add_argument("--symbol", default=cfg['symbol'])
+    p.add_argument('--symbols', nargs='+', default=None,
+                   help='Watchlist of symbols to scan/backtest (default: EURUSD from CFG). '
+                        'Example: --symbols EURUSD GBPUSD USDJPY')
+    p.add_argument('--sl-mode', choices=['atr', 'structure'], default=None,
+                   help='SL placement mode: atr (default, ATR-based) or structure (pattern invalidation level)')
+    p.add_argument('--trade-management', choices=['fixed', 'breakeven', 'trail', 'partial'], default=None,
+                   help='Trade management mode in backtest: fixed (default), breakeven, trail, or partial')
+    p.add_argument('--timeout-mode', choices=['marginal', 'expired'], default=None,
+                   help='Timeout classification: marginal (Marginal_Win/Loss) or expired (flat 0R)')
     p.add_argument("--atr",    type=int,   default=cfg['atr_period'])
     p.add_argument("--atr-tf", type=str,   default=None,
                    help="Override ATR source timeframe for ALL timeframes (e.g. H1, H4). "
@@ -3664,19 +4173,52 @@ def main():
         # Override the per-TF mapping to use the specified TF for all
         runtime_cfg['atr_tf_by_tf'] = {tf: override_tf for tf in TIMEFRAME_MAP.keys()}
 
+    # Handle --sl-mode, --trade-management, --timeout-mode overrides
+    if args.sl_mode:
+        runtime_cfg['sl_mode'] = args.sl_mode
+    if args.trade_management:
+        runtime_cfg['trade_management_mode'] = args.trade_management
+    if args.timeout_mode:
+        runtime_cfg['timeout_mode'] = args.timeout_mode
+
     # Handle --test-sound: play both test beeps and exit
     if args.test_sound:
         test_sound(runtime_cfg)
         return
 
+    # Determine symbol watchlist
+    if args.symbols:
+        watchlist = args.symbols
+    else:
+        watchlist = runtime_cfg.get('watchlist', [runtime_cfg.get('symbol', 'EURUSD')])
+
     if args.mode == 'live':
-        run_scanner(runtime_cfg)
+        run_scanner(runtime_cfg)  # Scanner handles its own symbol via cfg
     elif args.mode == 'scan':
-        run_single_scan(runtime_cfg)
+        for sym in watchlist:
+            if len(watchlist) > 1:
+                print(f"\n{'='*60}")
+                print(f"  SCANNING: {sym}")
+                print(f"{'='*60}")
+            runtime_cfg['symbol'] = sym
+            run_single_scan(runtime_cfg)
     elif args.mode == 'backtest':
-        run_quick_backtest(args.bars, runtime_cfg)
+        for sym in watchlist:
+            if len(watchlist) > 1:
+                print(f"\n{'='*60}")
+                print(f"  QUICK BACKTEST: {sym}")
+                print(f"{'='*60}")
+            runtime_cfg['symbol'] = sym
+            run_quick_backtest(args.bars, runtime_cfg)
     elif args.mode == 'fullbacktest':
-        run_full_backtest(args, runtime_cfg)
+        for sym in watchlist:
+            if len(watchlist) > 1:
+                print(f"\n{'='*60}")
+                print(f"  FULL BACKTEST: {sym}")
+                print(f"{'='*60}")
+            args.symbol = sym
+            runtime_cfg['symbol'] = sym
+            run_full_backtest(args, runtime_cfg)
 
 
 if __name__ == '__main__':
