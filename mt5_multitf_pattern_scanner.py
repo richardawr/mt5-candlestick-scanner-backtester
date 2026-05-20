@@ -11,8 +11,9 @@ Credentials are loaded exclusively from the .env file in the same directory.
 Install: pip install MetaTrader5 pandas numpy colorama python-dotenv
 
 Sound Alerts (Windows only):
-    - High-Hz triple beep for STRONG BUY signals (score >= 65)
-    - Low-Hz triple beep for STRONG SELL signals (score >= 65)
+    - Tier-aware: Tier A (Elite) always alerts, Tier B (Tradeable) alerts if score >= 60, Tier C/D never alerts
+    - High-Hz triple beep for BUY signals, Low-Hz triple beep for SELL signals
+    - Configurable via sound_alert_tier ('A', 'B', 'C') and sound_alert_tier_b_min_score
     - Type 'm' + Enter at any time to mute/unmute sound alerts
 
 Usage:
@@ -69,7 +70,7 @@ Usage:
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import argparse
 import time
 import os
@@ -234,7 +235,8 @@ CFG = {
     },
 
     # ── Session Classifier ─────────────────────────────────────────
-    'broker_utc_offset':     2,      # UTC+2 broker server time
+    'broker_utc_offset':     2,      # UTC+2 broker server time (auto-detected at startup; set 0 to disable auto-detect)
+                                      # Typical: UTC+2 winter / UTC+3 summer (follows US DST for NY-close brokers)
 
     # ── Signal Deduplication & Entry Verification ─────────────────
     'deduplicate_signals':   True,
@@ -273,7 +275,8 @@ CFG = {
     'sound_sell_hz':         400,    # Hz for strong sell triple beep
     'sound_beep_duration':   150,    # ms per individual beep
     'sound_beep_pause':      100,    # ms pause between beeps
-    'sound_strong_threshold': 65.0,  # signal score >= this = STRONG
+    'sound_alert_tier':      'B',    # Minimum tier to trigger sound: 'A' (elite only), 'B' (tradeable+), 'C' (all directional)
+    'sound_alert_tier_b_min_score': 60.0,  # Tier B patterns must also have score >= this to alert
 
     # ── Trade Management (Backtest) ────────────────────────────────
     'trade_management_mode': 'fixed',  # 'fixed', 'breakeven', 'trail', 'partial'
@@ -328,15 +331,21 @@ PATTERN_PRIORITY = {
 # SOUND ALERT FUNCTIONS
 # ============================================================
 
-def play_signal_beep(direction, score, cfg=None):
-    """Play a triple beep sound alert for strong signals.
+def play_signal_beep(direction, score, tier='D', cfg=None):
+    """Play a triple beep sound alert for tier-qualified signals.
 
-    High-Hz triple beep for STRONG BUY, Low-Hz triple beep for STRONG SELL.
-    Respects the global mute state and configuration thresholds.
+    Tier-aware alert logic (replaces flat score threshold):
+      - Tier A (ELITE):     Always alerts — highest confidence signals
+      - Tier B (TRADEABLE): Alerts if score >= sound_alert_tier_b_min_score (default 60)
+      - Tier C (MARGINAL):  Never alerts — use only with strong confluence
+      - Tier D (AVOID):     Never alerts — negative edge
+
+    High-Hz triple beep for BUY signals, Low-Hz triple beep for SELL signals.
 
     Args:
         direction: 'Bullish' or 'Bearish'
         score: signal quality score (0-100)
+        tier: pattern tier letter 'A', 'B', 'C', or 'D'
         cfg: configuration dict
     """
     global _sound_muted
@@ -349,9 +358,21 @@ def play_signal_beep(direction, score, cfg=None):
     if not _WINSOUND:
         return
 
-    # Only beep for STRONG signals (score >= threshold)
-    threshold = cfg.get('sound_strong_threshold', 65.0)
-    if score is None or score < threshold:
+    # Tier-based alert gate
+    min_tier = cfg.get('sound_alert_tier', 'B')
+    tier_b_min = cfg.get('sound_alert_tier_b_min_score', 60.0)
+
+    # Tier rank: A=1, B=2, C=3, D=4 — only alert if pattern's tier is at least as good as min_tier
+    tier_rank = {'A': 1, 'B': 2, 'C': 3, 'D': 4}
+    if tier_rank.get(tier, 4) > tier_rank.get(min_tier, 2):
+        return  # Pattern tier is worse than minimum allowed
+
+    # Tier B requires minimum score (good confluence/session needed)
+    if tier == 'B' and (score is None or score < tier_b_min):
+        return
+
+    # Tier A always passes; Tier C/D already blocked above
+    if score is None:
         return
 
     # Determine frequency based on direction
@@ -408,7 +429,7 @@ def start_sound_key_listener():
 
 
 def test_sound(cfg=None):
-    """Play test beeps for STRONG BUY and STRONG SELL so the user can verify audio.
+    """Play test beeps for Tier A BUY and SELL signals so the user can verify audio.
 
     Temporarily forces sound enabled and unmuted for the test, then restores
     the original state. Exits after playing both test beeps.
@@ -429,19 +450,21 @@ def test_sound(cfg=None):
     sell_hz = cfg.get('sound_sell_hz', 400)
     duration = cfg.get('sound_beep_duration', 150)
     pause = cfg.get('sound_beep_pause', 100)
+    alert_tier = cfg.get('sound_alert_tier', 'B')
 
     print("")
     print(C('cyan', "=" * 50))
     print(C('bold', "  SOUND TEST"))
     print(C('cyan', "=" * 50))
-    print(f"  STRONG BUY beep:  {buy_hz} Hz x 3")
-    print(f"  STRONG SELL beep: {sell_hz} Hz x 3")
+    print(f"  Alert Tier:       {alert_tier} (Tier A always, Tier B if score >= {cfg.get('sound_alert_tier_b_min_score', 60):.0f})")
+    print(f"  BUY beep:         {buy_hz} Hz x 3")
+    print(f"  SELL beep:        {sell_hz} Hz x 3")
     print(f"  Beep duration:    {duration} ms")
     print(f"  Pause between:    {pause} ms")
     print("")
 
-    # Test STRONG BUY
-    print(C('green', "  >>> Playing STRONG BUY test beep..."))
+    # Test Tier A BUY
+    print(C('green', "  >>> Playing Tier A BUY test beep..."))
     try:
         for i in range(3):
             winsound.Beep(int(buy_hz), int(duration))
@@ -452,8 +475,8 @@ def test_sound(cfg=None):
 
     time.sleep(0.5)
 
-    # Test STRONG SELL
-    print(C('red', "  >>> Playing STRONG SELL test beep..."))
+    # Test Tier A SELL
+    print(C('red', "  >>> Playing Tier A SELL test beep..."))
     try:
         for i in range(3):
             winsound.Beep(int(sell_hz), int(duration))
@@ -477,17 +500,69 @@ def test_sound(cfg=None):
 
 
 def broker_now():
-    """Return current broker server time. MT5 timestamps interpreted as UTC = broker time."""
-    return datetime.utcnow()
+    """Return current local time for log timestamps.
+
+    Uses datetime.now() so log timestamps match the user's wall clock.
+    Candle display times are converted to local time separately via
+    to_local_time().
+    """
+    return datetime.now()
 
 
 def broker_time(ts):
-    """Convert a Unix timestamp (from MT5) to broker server time.
+    """Convert MT5 Unix timestamp to broker server clock time.
 
-    MT5 brokers encode their server time directly in the timestamps,
-    so fromtimestamp with UTC returns the broker's clock time.
+    MT5 encodes broker server time directly in Unix timestamps as if it were
+    UTC.  For example, if the broker is at UTC+2 and it's 12:00 broker time,
+    the Unix timestamp represents 12:00 UTC (not the true 10:00 UTC).
+    Decoding as UTC therefore returns the broker's clock time directly.
     """
-    return datetime.fromtimestamp(int(ts), tz=None)
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).replace(tzinfo=None)
+
+
+def to_local_time(broker_dt, cfg=None):
+    """Convert a broker-time datetime to local machine time for display.
+
+    Formula:  local_time = broker_time - broker_utc_offset + local_utc_offset
+
+    The broker UTC offset comes from config (auto-detected at startup).
+    The local UTC offset is computed from the system clock (handles DST
+    automatically).
+    """
+    if cfg is None:
+        cfg = CFG
+    broker_offset = cfg.get('broker_utc_offset', 2)
+    local_offset_td = datetime.now() - datetime.utcnow()
+    return broker_dt - timedelta(hours=broker_offset) + local_offset_td
+
+
+def auto_detect_broker_offset(cfg=None):
+    """Auto-detect broker UTC offset by comparing the latest MT5 candle time
+    with the current UTC time.
+
+    MT5 timestamps encode broker time as UTC, so the difference between
+    the decoded broker time and true UTC gives the broker's offset.
+    Returns the detected offset (integer hours), or the configured default
+    if detection fails.
+    """
+    if cfg is None:
+        cfg = CFG
+    configured = cfg.get('broker_utc_offset', 2)
+    try:
+        symbol = cfg.get('symbol', 'EURUSD')
+        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
+        if rates is not None and len(rates) > 0:
+            broker_clock = datetime.fromtimestamp(
+                int(rates[-1]['time']), tz=timezone.utc
+            ).replace(tzinfo=None)
+            utc_now = datetime.utcnow()
+            diff_hours = (broker_clock - utc_now).total_seconds() / 3600
+            detected = round(diff_hours)
+            if abs(detected - diff_hours) < 0.5:
+                return detected
+    except Exception:
+        pass
+    return configured
 
 
 _log_lock = threading.Lock()
@@ -1872,7 +1947,16 @@ def format_pattern_output(candle, patterns, cfg=None, stats=None, tf_label='H4')
     ct = candle['time']
     if isinstance(ct, (int, float, np.integer, np.floating)):
         ct = broker_time(int(ct))
-    time_str = ct.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ct, 'strftime') else str(ct)
+    # MT5's 'time' field is the candle's OPEN time in broker time.
+    # 1. Add candle duration to get the CLOSE time
+    # 2. Convert broker time to local time for display
+    tf_minutes = TIMEFRAME_MAP.get(tf_label, {}).get('minutes', 0)
+    if tf_minutes and hasattr(ct, '__add__'):
+        close_ct_broker = ct + timedelta(minutes=tf_minutes)
+    else:
+        close_ct_broker = ct
+    close_ct = to_local_time(close_ct_broker, cfg)
+    time_str = close_ct.strftime("%Y-%m-%d %H:%M:%S") if hasattr(close_ct, 'strftime') else str(close_ct)
     bt = max(candle['open'], candle['close'])
     bb = min(candle['open'], candle['close'])
     lines = []
@@ -2012,13 +2096,18 @@ def format_pattern_output(candle, patterns, cfg=None, stats=None, tf_label='H4')
         if score is None:
             score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg, tf_label=tf_label)
         if score is not None:
-            if score >= 65:
+            if tier_letter == 'A':
+                score_label = "ELITE"; score_color = 'green'
+            elif tier_letter == 'B':
+                score_label = "TRADEABLE"; score_color = 'yellow'
+            elif score >= 65:
                 score_label = "STRONG"; score_color = 'green'
             elif score >= 52:
                 score_label = "MODERATE"; score_color = 'yellow'
             else:
                 score_label = "WEAK"; score_color = 'red'
-            lines.append(f"    Signal Score: {C(score_color, C('bold', f'{score:.1f}/100 [{score_label}]'))}")
+            alert_tag = " [ALERT]" if (tier_letter in ('A', 'B')) else ""
+            lines.append(f"    Signal Score: {C(score_color, C('bold', f'{score:.1f}/100 [{score_label}{alert_tag}]'))}")
         elif not has_edge:
             lines.append(C('dim', f"  HISTORICAL EDGE: Insufficient data (<{min_sig} signals)"))
 
@@ -3423,6 +3512,7 @@ def run_scanner(cfg=None):
     if len(cfg.get('watchlist', [])) > 1:
         log_message(f"  Watchlist: {watchlist_display} (live scanner: {symbol})", cfg)
     log_message(f"Active timeframes: {C('yellow', ', '.join(active_tfs))}", cfg)
+    log_message(f"Timestamps: Local time ({datetime.now().strftime('%Z')}, auto-detected broker UTC+{cfg.get('broker_utc_offset', 2)})", cfg)
     sl_str = f"{cfg['sl_multiplier']}x ATR"
     log_message(f"SL: {C('red', sl_str)} | TP R:R = 1:{cfg['tp_multiplier']/cfg['sl_multiplier']:.1f}", cfg)
 
@@ -3442,8 +3532,13 @@ def run_scanner(cfg=None):
     if cfg.get('sound_enabled', True) and _WINSOUND:
         buy_hz = cfg.get('sound_buy_hz', 1200)
         sell_hz = cfg.get('sound_sell_hz', 400)
-        threshold = cfg.get('sound_strong_threshold', 65.0)
-        log_message(f"Sound Alerts: {C('green', 'ENABLED')} | Buy: {buy_hz}Hz | Sell: {sell_hz}Hz | Threshold: {threshold:.0f}", cfg)
+        alert_tier = cfg.get('sound_alert_tier', 'B')
+        tier_b_min = cfg.get('sound_alert_tier_b_min_score', 60.0)
+        tier_labels = {'A': 'Elite only', 'B': 'Tradeable+', 'C': 'All directional'}
+        tier_desc = tier_labels.get(alert_tier, alert_tier)
+        log_message(f"Sound Alerts: {C('green', 'ENABLED')} | Buy: {buy_hz}Hz | Sell: {sell_hz}Hz | Alert Tier: {alert_tier} ({tier_desc})", cfg)
+        if alert_tier == 'B':
+            log_message(f"  Tier B requires score >= {tier_b_min:.0f}", cfg)
         log_message(f"Sound is {C('red', 'MUTED')} — Type {C('yellow', '\"m\" + Enter')} to unmute", cfg)
     elif not _WINSOUND:
         log_message(C('yellow', "Sound Alerts: DISABLED (winsound not available — Windows only)"), cfg)
@@ -3471,6 +3566,16 @@ def run_scanner(cfg=None):
 
     if not connect_mt5(cfg):
         return
+
+    # Auto-detect broker UTC offset (handles DST changes automatically)
+    configured_offset = cfg.get('broker_utc_offset', 2)
+    detected_offset = auto_detect_broker_offset(cfg)
+    if detected_offset != configured_offset:
+        log_message(
+            C('yellow', f"Broker UTC offset: auto-detected {detected_offset} (config says {configured_offset}, using detected)"), cfg)
+        cfg['broker_utc_offset'] = detected_offset
+    else:
+        log_message(f"Broker UTC offset: {detected_offset} (confirmed)", cfg)
 
     # Track last candle time per timeframe
     last_candle_time = {tf: None for tf in active_tfs}
@@ -3530,14 +3635,18 @@ def run_scanner(cfg=None):
                                     score = pat.get('signal_score')
                                     if score is None:
                                         score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg, tf_label=tf_label)
-                                    play_signal_beep(pat['direction'], score, cfg)
+                                    tier_letter, _, _ = compute_pattern_tier(pat['name'], stats, cfg)
+                                    play_signal_beep(pat['direction'], score, tier_letter, cfg)
                         continue
 
                     if bar_time != last_candle_time[tf_label]:
-                        next_close = bar_time + timedelta(minutes=tf_info['minutes'])
+                        # bar_time is the NEW (forming) candle's open time (broker time).
+                        # Its close time = bar_time + tf_minutes, converted to local time.
+                        next_close_local = to_local_time(
+                            bar_time + timedelta(minutes=tf_info['minutes']), cfg)
                         log_message(
                             C('bold', C('yellow',
-                              f"\nNEW {tf_label} CANDLE CLOSED! | Next: {next_close.strftime('%Y-%m-%d %H:%M')}"
+                              f"\nNEW {tf_label} CANDLE CLOSED! | Next {tf_label} close: {next_close_local.strftime('%Y-%m-%d %H:%M')}"
                             )), cfg
                         )
                         pats = scan_patterns(list(rates[:-1]), cfg, d1_rates_cache, tf_label, htf_atr_rates)
@@ -3551,7 +3660,8 @@ def run_scanner(cfg=None):
                                 score = pat.get('signal_score')
                                 if score is None:
                                     score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg, tf_label=tf_label)
-                                play_signal_beep(pat['direction'], score, cfg)
+                                tier_letter, _, _ = compute_pattern_tier(pat['name'], stats, cfg)
+                                play_signal_beep(pat['direction'], score, tier_letter, cfg)
 
                         last_candle_time[tf_label] = bar_time
 
@@ -3633,7 +3743,8 @@ def run_single_scan(cfg=None):
                 score = pat.get('signal_score')
                 if score is None:
                     score = compute_signal_score(pat['name'], pat['session'], pat['direction'], stats, cfg, tf_label=tf_label)
-                play_signal_beep(pat['direction'], score, cfg)
+                tier_letter, _, _ = compute_pattern_tier(pat['name'], stats, cfg)
+                play_signal_beep(pat['direction'], score, tier_letter, cfg)
 
     try: mt5.shutdown()
     except Exception: pass
@@ -3743,7 +3854,9 @@ def run_full_backtest(args, cfg=None):
         atr_src = get_atr_tf(tf, cfg)
         atr_map_display.append(f"{tf}→{atr_src}" if atr_src != tf else tf)
     print(f"  ATR Source : {', '.join(atr_map_display)}")
-    print(f"  SL/TP      : {cfg.get('sl_multiplier', 1.5)}x / {cfg.get('tp_multiplier', 1.5)}x ATR")
+    sl_m = cfg.get('sl_multiplier', 1.5)
+    tp_m = cfg.get('tp_multiplier', 1.5)
+    print(f"  SL/TP      : {sl_m}x / {tp_m}x ATR  |  R:R 1:{tp_m/sl_m:.1f}")
     print(f"  SL Mode    : {cfg.get('sl_mode', 'atr')}")
     print(f"  Trade Mgmt : {cfg.get('trade_management_mode', 'fixed')}")
     print(f"  Output     : {out_dir}")
@@ -4070,7 +4183,13 @@ Examples:
                    help="Override ATR source timeframe for ALL timeframes (e.g. H1, H4). "
                         "By default, atr_tf_by_tf config is used (M5→H1, M15→H1, etc.)")
     p.add_argument("--sl",     type=float, default=cfg['sl_multiplier'])
-    p.add_argument("--tp",     type=float, default=cfg['tp_multiplier'])
+    p.add_argument("--tp",     type=float, default=cfg['tp_multiplier'],
+                   help="TP distance as ATR multiplier (e.g. 3.0). "
+                        "Alternatively use --tp-rr for R:R-based setting")
+    p.add_argument("--tp-rr",  type=float, default=None,
+                   help="TP R:R ratio relative to SL (default: derived from --tp/--sl). "
+                        "E.g. --tp-rr 2.0 sets TP at 2x the SL distance (1:2 R:R). "
+                        "Overrides --tp if both are given")
     p.add_argument("--forward",type=int,   default=cfg['default_forward_candles'],
                    help="Default forward candles for evaluation (H4 default)")
     p.add_argument("--output", default=DEFAULT_OUTPUT_DIR)
@@ -4126,7 +4245,7 @@ Examples:
     p.add_argument("--warmup-bars",    type=int, default=cfg['warmup_bars'])
     p.add_argument("--bars-to-fetch",  type=int, default=cfg['bars_to_fetch'])
     p.add_argument("--test-sound",     action="store_true",
-                   help="Play test beeps (STRONG BUY then STRONG SELL) and exit")
+                   help="Play test beeps (Tier A BUY then SELL) and exit")
 
     p.set_defaults(
         deduplicate_signals=cfg['deduplicate_signals'],
@@ -4190,6 +4309,11 @@ def main():
         runtime_cfg['trade_management_mode'] = args.trade_management
     if args.timeout_mode:
         runtime_cfg['timeout_mode'] = args.timeout_mode
+
+    # Handle --tp-rr: override tp_multiplier from R:R ratio
+    # tp_multiplier = sl_multiplier × tp_rr  (e.g. sl=1.5, tp-rr=2.0 → tp=3.0 → R:R 1:2)
+    if args.tp_rr is not None:
+        runtime_cfg['tp_multiplier'] = runtime_cfg['sl_multiplier'] * args.tp_rr
 
     # Handle --test-sound: play both test beeps and exit
     if args.test_sound:
