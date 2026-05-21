@@ -713,3 +713,13 @@ Patterns below `--min-signal-score` are filtered out (default: 0, i.e. show all)
 - Candle close times and "Next:" candle times are converted to **local computer time** via the auto-detected broker UTC offset
 - Session classification uses **broker server time** hours internally
 - The broker UTC offset is auto-detected at startup; if detection fails, the `broker_utc_offset` config value is used (default: UTC+2)
+
+---
+
+<img width="2445" height="949" alt="chart_06_bearish_vs_bullish" src="https://github.com/user-attachments/assets/e9c8a039-1424-4771-a357-321edee55e15" />
+<img width="3795" height="949" alt="chart_05_confluence" src="https://github.com/user-attachments/assets/faa68f18-c30b-4728-b058-f6c5ba3fca9f" />
+<img width="2430" height="1545" alt="chart_04_cross_pattern_session" src="https://github.com/user-attachments/assets/c20e7dc1-e607-41d6-aac4-b3bc178b54da" />
+<img width="2444" height="1096" alt="chart_03_session_performance" src="https://github.com/user-attachments/assets/239a70c6-dde7-4218-91fb-41f21178565d" />
+<img width="1788" height="3007" alt="chart_02b_pattern_by_tf" src="https://github.com/user-attachments/assets/ae8192a5-4678-41d3-a392-3d8c14746f6d" />
+<img width="2167" height="1545" alt="chart_02_pattern_win_rates_top20" src="https://github.com/user-attachments/assets/c90a8a81-3d61-49ba-965d-00000c351a22" />
+<img width="2445" height="1390" alt="chart_01_overall_performance" src="https://github.com/user-attachments/assets/a9bbc92a-51ac-44b4-bfa2-334c6f89f21d" />
