@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v8
+MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v9
 ===============================================================
-Expanded from v5: supports M5, M15, H1, H4, and D1 timeframes for both
-live scanning and backtesting. All parameters are consolidated near the top.
+50+ candlestick patterns across M5, M15, H1, H4, D1 with TheStrat composites,
+multi-timeframe backtesting, live scanner with signal scoring, tier-aware sound
+alerts, auto-detected broker timezone, and local time display.
+All parameters are consolidated near the top.
 
 Must run on Windows with MT5 installed.
 Credentials are loaded exclusively from the .env file in the same directory.
@@ -18,53 +20,53 @@ Sound Alerts (Windows only):
 
 Usage:
     # Live scanner — all 5 timeframes (default)
-    python mt5_multitf_pattern_scanner_v8.py
+    python mt5_multitf_pattern_scanner.py
 
     # Live scanner — specific timeframes only
-    python mt5_multitf_pattern_scanner_v8.py --timeframes M5 H1 H4
+    python mt5_multitf_pattern_scanner.py --timeframes M5 H1 H4
 
     # One-shot scan of latest closed candle on all timeframes
-    python mt5_multitf_pattern_scanner_v8.py --mode scan
+    python mt5_multitf_pattern_scanner.py --mode scan
 
     # Quick backtest (last 500 bars on H4)
-    python mt5_multitf_pattern_scanner_v8.py --mode backtest --bars 500
+    python mt5_multitf_pattern_scanner.py --mode backtest --bars 500
 
     # Full backtest on one timeframe
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --timeframes H4
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest --timeframes H4
 
     # Full backtest on ALL timeframes, date-ranged
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --from 2024-01-01 --to 2024-12-31
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2024-01-01 --to 2024-12-31
 
     # Full backtest with filters
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest \\
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest \\
         --d1-trend-filter --volume-filter --forward 15 --sl 1.5 --tp 1.5
 
     # Full backtest with structure-based SL (pattern invalidation levels)
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --sl-mode structure
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest --sl-mode structure
 
     # Full backtest with breakeven trade management
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --trade-management breakeven
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest --trade-management breakeven
 
     # Full backtest with trailing stop management
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --trade-management trail
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest --trade-management trail
 
     # Full backtest with partial close + trailing management
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --trade-management partial
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest --trade-management partial
 
     # Full backtest with expired timeout (0R flat) instead of marginal win/loss
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --timeout-mode expired
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest --timeout-mode expired
 
     # Multi-symbol watchlist scan
-    python mt5_multitf_pattern_scanner_v8.py --mode scan --symbols EURUSD GBPUSD USDJPY
+    python mt5_multitf_pattern_scanner.py --mode scan --symbols EURUSD GBPUSD USDJPY
 
     # Multi-symbol full backtest
-    python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --symbols EURUSD GBPUSD
+    python mt5_multitf_pattern_scanner.py --mode fullbacktest --symbols EURUSD GBPUSD
 
     # Live scanner with custom account sizing
-    python mt5_multitf_pattern_scanner_v8.py --mode live --account-balance 25000 --risk-percent 0.5
+    python mt5_multitf_pattern_scanner.py --mode live --account-balance 25000 --risk-percent 0.5
 
     # Test sound alerts (plays both BUY and SELL test beeps)
-    python mt5_multitf_pattern_scanner_v8.py --test-sound
+    python mt5_multitf_pattern_scanner.py --test-sound
 """
 
 import MetaTrader5 as mt5
@@ -201,6 +203,16 @@ CFG = {
     'tweezer_tolerance_pips':    3,
     'engulf_tolerance_pips':     2.0,
 
+    # ── New Pattern Thresholds ──────────────────────────────────────
+    'belt_hold_wick_ratio':           0.1,   # Max wick/body ratio for belt holds
+    'kicker_min_body_ratio':          0.6,   # Min body ratio for kicker candles
+    'separating_lines_tolerance_pips': 2,     # Tolerance for matching open prices
+    'meeting_lines_tolerance_pips':    2,     # Tolerance for matching close prices
+    'gap_tolerance_pips':             2,      # Minimum gap size in pips for gap patterns
+
+    # ── TheStrat Pattern Detection ─────────────────────────────────
+    'thestrat_enabled':               True,   # Enable TheStrat composite patterns
+
     # ── Trend Detection ────────────────────────────────────────────
     'trend_lookback':        20,     # SMA-based lookback bars
 
@@ -309,17 +321,44 @@ DEFAULT_OUTPUT_DIR = os.path.join(_LOG_DIR, "backtest_results")
 
 # ── Pattern Priority for Deduplication ─────────────────────────────
 PATTERN_PRIORITY = {
+    # ── Neutral / Low Priority (1) ──
     'Doji': 1, 'Spinning Top': 1,
+    'Dragonfly Doji': 1, 'Gravestone Doji': 1,
+    # ── Single-Candle Directional (2) ──
     'Hammer': 2, 'Inverted Hammer': 2,
     'Shooting Star': 2, 'Hanging Man': 2,
+    'Bullish Belt Hold': 2, 'Bearish Belt Hold': 2,
+    # ── Strong Single-Candle (3) ──
     'Marubozu (Bullish)': 3, 'Marubozu (Bearish)': 3,
+    # ── Two-Candle Reversal (4) ──
     'Tweezer Tops': 4, 'Tweezer Bottoms': 4,
     'Near Bullish Engulfing': 4, 'Near Bearish Engulfing': 4,
+    'Bullish Harami': 4, 'Bearish Harami': 4,
+    'Piercing Line': 4, 'Dark Cloud Cover': 4,
+    'Meeting Lines (Bullish)': 4, 'Meeting Lines (Bearish)': 4,
+    'Bullish Separating Lines': 4, 'Bearish Separating Lines': 4,
+    'Bearish Doji Star': 4,
+    # ── Strong Two-Candle (5) ──
     'Bullish Engulfing': 5, 'Bearish Engulfing': 5,
-    'Bullish Harami': 6, 'Bearish Harami': 6,
+    'Bullish Kicker': 5, 'Bearish Kicker': 5,
+    # ── Three-Candle (6-7) ──
+    'Three Inside Up': 6, 'Three Inside Down': 6,
+    'Three Outside Up': 6, 'Three Outside Down': 6,
     'Morning Star': 7, 'Evening Star': 7,
+    'Bullish Abandoned Baby': 7, 'Bearish Abandoned Baby': 7,
+    'Upside Gap Two Crows': 7,
+    # ── Strong Three-Candle (8) ──
     'Three White Soldiers': 8, 'Three Black Crows': 8,
-    'Rising Three Methods': 9, 'Falling Three Methods': 9,
+    # ── Four-Candle (9) ──
+    'Bullish Three-Line Strike': 9, 'Bearish Three-Line Strike': 9,
+    'Concealing Baby Swallow': 9,
+    # ── Five-Candle (10) ──
+    'Rising Three Methods': 10, 'Falling Three Methods': 10,
+    'Mat Hold (Bullish)': 10, 'Mat Hold (Bearish)': 10,
+    'Ladder Bottom': 10,
+    # ── TheStrat Composite (11-12) ──
+    'TheStrat 2-2': 11, 'TheStrat 2-1-2': 11, 'TheStrat 3-1-2': 11,
+    'TheStrat 1-2-2 Rev': 12, 'TheStrat 1-3 Rev': 12,
 }
 
 
@@ -953,7 +992,7 @@ def mt5_rates_to_df(rates, cfg=None):
     return df
 
 
-# ── Scanner-specific detect_* functions removed (v8) ────────────
+# ── Scanner-specific detect_* functions removed (v8, unified in v9) ────────────
 # Pattern detection is now unified: scan_patterns() converts MT5
 # structured arrays to DataFrames and uses the fb_detect_* functions
 # that are also used by the backtest. This eliminates ~400 lines of
@@ -2415,6 +2454,496 @@ def fb_detect_tweezer(df, idx, cfg=None):
     if abs(p['LOW']  - c['LOW'])  <= tol and trend in ('downtrend', 'ranging'): return 'Tweezer Bottoms'
     return None
 
+# ── NEW SINGLE-CANDLE PATTERNS ──────────────────────────────────────
+
+def fb_detect_dragonfly_doji(df, idx, cfg=None):
+    """Dragonfly Doji: very small body at the top with long lower wick, nearly no upper wick.
+    Appears at bottom of downtrend → Bullish Reversal."""
+    if cfg is None: cfg = CFG
+    r = df.iloc[idx]
+    if r['RANGE'] == 0: return False
+    if r['BODY_RATIO'] > cfg['doji_body_ratio'] * 1.5: return False  # Slightly looser than pure doji
+    if r['UPPER_WICK'] > r['BODY'] * 2: return False   # Must have tiny/no upper wick
+    if r['LOWER_WICK'] < r['RANGE'] * 0.6: return False  # Long lower wick is key
+    return True
+
+def fb_detect_gravestone_doji(df, idx, cfg=None):
+    """Gravestone Doji: very small body at the bottom with long upper wick, nearly no lower wick.
+    Appears at top of uptrend → Bearish Reversal."""
+    if cfg is None: cfg = CFG
+    r = df.iloc[idx]
+    if r['RANGE'] == 0: return False
+    if r['BODY_RATIO'] > cfg['doji_body_ratio'] * 1.5: return False
+    if r['LOWER_WICK'] > r['BODY'] * 2: return False   # Must have tiny/no lower wick
+    if r['UPPER_WICK'] < r['RANGE'] * 0.6: return False  # Long upper wick is key
+    return True
+
+def fb_detect_bullish_belt_hold(df, idx, cfg=None):
+    """Bullish Belt Hold: opens at/near the low, closes near the high, very small lower wick.
+    Appears at bottom of downtrend → Bullish Reversal."""
+    if cfg is None: cfg = CFG
+    r = df.iloc[idx]
+    if idx < 3: return False
+    trend = fb_detect_trend(df, idx, cfg)
+    if trend not in ('downtrend', 'ranging'): return False
+    if r['BODY_SIGN'] != 1: return False               # Must be bullish candle
+    if r['BODY_RATIO'] < cfg['long_candle_ratio'] * 0.8: return False  # Must be substantial body
+    if r['LOWER_WICK'] > r['BODY'] * cfg['belt_hold_wick_ratio']: return False  # Tiny/no lower wick
+    return True
+
+def fb_detect_bearish_belt_hold(df, idx, cfg=None):
+    """Bearish Belt Hold: opens at/near the high, closes near the low, very small upper wick.
+    Appears at top of uptrend → Bearish Reversal."""
+    if cfg is None: cfg = CFG
+    r = df.iloc[idx]
+    if idx < 3: return False
+    trend = fb_detect_trend(df, idx, cfg)
+    if trend not in ('uptrend', 'ranging'): return False
+    if r['BODY_SIGN'] != -1: return False               # Must be bearish candle
+    if r['BODY_RATIO'] < cfg['long_candle_ratio'] * 0.8: return False
+    if r['UPPER_WICK'] > r['BODY'] * cfg['belt_hold_wick_ratio']: return False
+    return True
+
+
+# ── NEW TWO-CANDLE PATTERNS ─────────────────────────────────────────
+
+def fb_detect_piercing_line(df, idx, cfg=None):
+    """Piercing Line: bearish candle followed by bullish candle that opens below
+    prior close but closes above the midpoint of the bearish candle's body.
+    Bullish Reversal."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != -1: return False               # Prior must be bearish
+    if c['BODY_SIGN'] != 1: return False                 # Current must be bullish
+    if p['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.6: return False  # Prior must be meaningful
+    p_mid = (p['OPEN'] + p['CLOSE']) / 2
+    if c['OPEN'] >= p['CLOSE']: return False             # Must open below prior close
+    if c['CLOSE'] <= p_mid: return False                  # Must close above midpoint
+    return True
+
+def fb_detect_dark_cloud_cover(df, idx, cfg=None):
+    """Dark Cloud Cover: bullish candle followed by bearish candle that opens above
+    prior close but closes below the midpoint of the bullish candle's body.
+    Bearish Reversal."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != 1: return False                 # Prior must be bullish
+    if c['BODY_SIGN'] != -1: return False                 # Current must be bearish
+    if p['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.6: return False
+    p_mid = (p['OPEN'] + p['CLOSE']) / 2
+    if c['OPEN'] <= p['CLOSE']: return False              # Must open above prior close
+    if c['CLOSE'] >= p_mid: return False                   # Must close below midpoint
+    return True
+
+def fb_detect_bullish_kicker(df, idx, cfg=None):
+    """Bullish Kicker: long bearish candle followed by an even longer bullish candle
+    that opens above the prior close (gap up) and closes higher.
+    Strong Bullish Reversal."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != -1: return False
+    if c['BODY_SIGN'] != 1: return False
+    min_body = cfg.get('kicker_min_body_ratio', 0.6)
+    if p['BODY_RATIO'] < min_body: return False
+    if c['BODY_RATIO'] < min_body: return False
+    gap_tol = cfg.get('gap_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    if c['OPEN'] < p['CLOSE'] + gap_tol: return False     # Must gap up above prior close
+    if c['CLOSE'] <= p['OPEN']: return False               # Must close above prior open
+    return True
+
+def fb_detect_bearish_kicker(df, idx, cfg=None):
+    """Bearish Kicker: long bullish candle followed by an even longer bearish candle
+    that opens below the prior open (gap down) and closes lower.
+    Strong Bearish Reversal."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != 1: return False
+    if c['BODY_SIGN'] != -1: return False
+    min_body = cfg.get('kicker_min_body_ratio', 0.6)
+    if p['BODY_RATIO'] < min_body: return False
+    if c['BODY_RATIO'] < min_body: return False
+    gap_tol = cfg.get('gap_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    if c['OPEN'] > p['CLOSE'] - gap_tol: return False     # Must gap down below prior close
+    if c['CLOSE'] >= p['OPEN']: return False                # Must close below prior open
+    return True
+
+def fb_detect_meeting_lines_bullish(df, idx, cfg=None):
+    """Bullish Meeting Lines: long bearish candle followed by long bullish candle
+    that opens lower but closes at approximately the same level as the prior close.
+    Bullish Reversal."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != -1: return False
+    if c['BODY_SIGN'] != 1: return False
+    if p['BODY_RATIO'] < 0.5: return False
+    if c['BODY_RATIO'] < 0.5: return False
+    tol = cfg.get('meeting_lines_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    if abs(c['CLOSE'] - p['CLOSE']) > tol: return False    # Closes must be approximately equal
+    return True
+
+def fb_detect_meeting_lines_bearish(df, idx, cfg=None):
+    """Bearish Meeting Lines: long bullish candle followed by long bearish candle
+    that opens higher but closes at approximately the same level as the prior close.
+    Bearish Reversal."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != 1: return False
+    if c['BODY_SIGN'] != -1: return False
+    if p['BODY_RATIO'] < 0.5: return False
+    if c['BODY_RATIO'] < 0.5: return False
+    tol = cfg.get('meeting_lines_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    if abs(c['CLOSE'] - p['CLOSE']) > tol: return False
+    return True
+
+def fb_detect_bullish_separating_lines(df, idx, cfg=None):
+    """Bullish Separating Lines: bearish candle followed by bullish candle that
+    opens at approximately the same price as the prior open. Bullish Continuation."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != -1: return False
+    if c['BODY_SIGN'] != 1: return False
+    if p['BODY_RATIO'] < 0.4: return False
+    if c['BODY_RATIO'] < 0.4: return False
+    tol = cfg.get('separating_lines_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    if abs(c['OPEN'] - p['OPEN']) > tol: return False      # Opens must be approximately equal
+    return True
+
+def fb_detect_bearish_separating_lines(df, idx, cfg=None):
+    """Bearish Separating Lines: bullish candle followed by bearish candle that
+    opens at approximately the same price as the prior open. Bearish Continuation."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != 1: return False
+    if c['BODY_SIGN'] != -1: return False
+    if p['BODY_RATIO'] < 0.4: return False
+    if c['BODY_RATIO'] < 0.4: return False
+    tol = cfg.get('separating_lines_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    if abs(c['OPEN'] - p['OPEN']) > tol: return False
+    return True
+
+def fb_detect_bearish_doji_star(df, idx, cfg=None):
+    """Bearish Doji Star: long bullish candle followed by a Doji (small body).
+    Shows indecision after a strong move up → Bearish Reversal signal."""
+    if idx < 1: return False
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    if p['BODY_SIGN'] != 1: return False
+    if p['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7): return False
+    if c['BODY_RATIO'] > cfg.get('doji_body_ratio', 0.1) * 2: return False  # Must be doji-like
+    return True
+
+
+# ── NEW THREE-CANDLE PATTERNS ────────────────────────────────────────
+
+def fb_detect_three_inside_up(df, idx, cfg=None):
+    """Three Inside Up: large bearish → small bullish inside it (harami) →
+    third bullish closing above first candle's open. Confirms Bullish Harami."""
+    if idx < 2: return False
+    f, s, t = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    # First: large bearish
+    if f['BODY_SIGN'] != -1 or f['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.8: return False
+    # Second: small bullish inside first's body
+    if s['BODY_SIGN'] != 1: return False
+    if s['BODY_RATIO'] > cfg.get('small_candle_ratio', 0.35) + 0.15: return False
+    if max(s['OPEN'], s['CLOSE']) > max(f['OPEN'], f['CLOSE']): return False
+    if min(s['OPEN'], s['CLOSE']) < min(f['OPEN'], f['CLOSE']): return False
+    # Third: bullish closing above first's open
+    if t['BODY_SIGN'] != 1: return False
+    if t['CLOSE'] <= f['OPEN']: return False
+    return True
+
+def fb_detect_three_inside_down(df, idx, cfg=None):
+    """Three Inside Down: large bullish → small bearish inside it (harami) →
+    third bearish closing below first candle's open. Confirms Bearish Harami."""
+    if idx < 2: return False
+    f, s, t = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    if f['BODY_SIGN'] != 1 or f['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.8: return False
+    if s['BODY_SIGN'] != -1: return False
+    if s['BODY_RATIO'] > cfg.get('small_candle_ratio', 0.35) + 0.15: return False
+    if max(s['OPEN'], s['CLOSE']) > max(f['OPEN'], f['CLOSE']): return False
+    if min(s['OPEN'], s['CLOSE']) < min(f['OPEN'], f['CLOSE']): return False
+    if t['BODY_SIGN'] != -1: return False
+    if t['CLOSE'] >= f['OPEN']: return False
+    return True
+
+def fb_detect_three_outside_up(df, idx, cfg=None):
+    """Three Outside Up: bearish candle → bullish engulfing → another bullish
+    closing higher. Confirms Bullish Engulfing."""
+    if idx < 2: return False
+    f, s, t = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    # First: bearish
+    if f['BODY_SIGN'] != -1: return False
+    # Second: bullish engulfing
+    if s['BODY_SIGN'] != 1: return False
+    if s['OPEN'] > f['CLOSE'] or s['CLOSE'] < f['OPEN']: return False
+    # Third: bullish closing higher than second
+    if t['BODY_SIGN'] != 1: return False
+    if t['CLOSE'] <= s['CLOSE']: return False
+    return True
+
+def fb_detect_three_outside_down(df, idx, cfg=None):
+    """Three Outside Down: bullish candle → bearish engulfing → another bearish
+    closing lower. Confirms Bearish Engulfing."""
+    if idx < 2: return False
+    f, s, t = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    if f['BODY_SIGN'] != 1: return False
+    if s['BODY_SIGN'] != -1: return False
+    if s['OPEN'] < f['CLOSE'] or s['CLOSE'] > f['OPEN']: return False
+    if t['BODY_SIGN'] != -1: return False
+    if t['CLOSE'] >= s['CLOSE']: return False
+    return True
+
+def fb_detect_bullish_abandoned_baby(df, idx, cfg=None):
+    """Bullish Abandoned Baby: long bearish → Doji (gap down) → long bullish (gap up).
+    Rare, strong Bullish Reversal."""
+    if idx < 2: return False
+    f, s, t = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    if f['BODY_SIGN'] != -1 or f['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7): return False
+    if s['BODY_RATIO'] > cfg.get('doji_body_ratio', 0.1) * 2: return False  # Doji
+    if t['BODY_SIGN'] != 1 or t['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.6: return False
+    gap_tol = cfg.get('gap_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    # Doji gaps down from first (doji high < first low)
+    if s['HIGH'] > f['LOW'] + gap_tol: return False
+    # Third gaps up from doji (third low > doji high)
+    if t['LOW'] < s['HIGH'] + gap_tol: return False
+    return True
+
+def fb_detect_bearish_abandoned_baby(df, idx, cfg=None):
+    """Bearish Abandoned Baby: long bullish → Doji (gap up) → long bearish (gap down).
+    Rare, strong Bearish Reversal."""
+    if idx < 2: return False
+    f, s, t = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    if f['BODY_SIGN'] != 1 or f['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7): return False
+    if s['BODY_RATIO'] > cfg.get('doji_body_ratio', 0.1) * 2: return False
+    if t['BODY_SIGN'] != -1 or t['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.6: return False
+    gap_tol = cfg.get('gap_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    # Doji gaps up from first (doji low > first high)
+    if s['LOW'] < f['HIGH'] - gap_tol: return False
+    # Third gaps down from doji (third high < doji low)
+    if t['HIGH'] > s['LOW'] - gap_tol: return False
+    return True
+
+def fb_detect_upside_gap_two_crows(df, idx, cfg=None):
+    """Upside Gap Two Crows: long bullish → small bearish gap up →
+    larger bearish that engulfs the second but closes below first's close.
+    Bearish Reversal."""
+    if idx < 2: return False
+    f, s, t = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    if f['BODY_SIGN'] != 1 or f['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7): return False
+    if s['BODY_SIGN'] != -1: return False                # Second: small bearish
+    gap_tol = cfg.get('gap_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    if s['LOW'] < f['HIGH'] - gap_tol: return False       # Must gap up
+    if t['BODY_SIGN'] != -1: return False                 # Third: bearish
+    if t['CLOSE'] >= s['CLOSE']: return False              # Must close below second's close
+    if t['OPEN'] >= s['OPEN']: return False                # Must open above second's open (engulf body)
+    if t['CLOSE'] >= f['CLOSE']: return False              # Must close below first's close
+    return True
+
+
+# ── NEW FOUR-CANDLE PATTERNS ─────────────────────────────────────────
+
+def fb_detect_bullish_three_line_strike(df, idx, cfg=None):
+    """Bullish Three-Line Strike: three consecutive bullish candles followed by
+    a long bearish candle that opens above third's close and closes below
+    first candle's open. Bullish Continuation (pullback before resumption)."""
+    if idx < 3: return False
+    c1, c2, c3, c4 = df.iloc[idx-3], df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    # First three: consecutive bullish with progressive closes
+    if c1['BODY_SIGN'] != 1 or c2['BODY_SIGN'] != 1 or c3['BODY_SIGN'] != 1: return False
+    if c1['BODY_RATIO'] < 0.4 or c2['BODY_RATIO'] < 0.4 or c3['BODY_RATIO'] < 0.4: return False
+    if not (c3['CLOSE'] > c2['CLOSE'] > c1['CLOSE']): return False
+    # Fourth: long bearish opening above third, closing below first
+    if c4['BODY_SIGN'] != -1: return False
+    if c4['OPEN'] < c3['CLOSE']: return False
+    if c4['CLOSE'] > c1['OPEN']: return False
+    return True
+
+def fb_detect_bearish_three_line_strike(df, idx, cfg=None):
+    """Bearish Three-Line Strike: three consecutive bearish candles followed by
+    a long bullish candle that opens below third's close and closes above
+    first candle's open. Bearish Continuation."""
+    if idx < 3: return False
+    c1, c2, c3, c4 = df.iloc[idx-3], df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    if c1['BODY_SIGN'] != -1 or c2['BODY_SIGN'] != -1 or c3['BODY_SIGN'] != -1: return False
+    if c1['BODY_RATIO'] < 0.4 or c2['BODY_RATIO'] < 0.4 or c3['BODY_RATIO'] < 0.4: return False
+    if not (c3['CLOSE'] < c2['CLOSE'] < c1['CLOSE']): return False
+    if c4['BODY_SIGN'] != 1: return False
+    if c4['OPEN'] > c3['CLOSE']: return False
+    if c4['CLOSE'] < c1['OPEN']: return False
+    return True
+
+def fb_detect_concealing_baby_swallow(df, idx, cfg=None):
+    """Concealing Baby Swallow: two long bearish → gap down with a small-bodied candle →
+    another long bearish that engulfs the small candle. Bullish Reversal.
+    Very rare pattern."""
+    if idx < 3: return False
+    c1, c2, c3, c4 = df.iloc[idx-3], df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    # First two: long bearish
+    if c1['BODY_SIGN'] != -1 or c2['BODY_SIGN'] != -1: return False
+    if c1['BODY_RATIO'] < 0.5 or c2['BODY_RATIO'] < 0.5: return False
+    # Third: small body that gaps down
+    if c3['BODY_RATIO'] > cfg.get('small_candle_ratio', 0.35) + 0.1: return False
+    gap_tol = cfg.get('gap_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    if c3['HIGH'] > min(c1['LOW'], c2['LOW']) + gap_tol: return False  # Must gap down
+    # Fourth: long bearish engulfing the third
+    if c4['BODY_SIGN'] != -1: return False
+    if c4['BODY_RATIO'] < 0.5: return False
+    if c4['HIGH'] < c3['HIGH'] or c4['LOW'] > c3['LOW']: return False  # Engulfs third
+    return True
+
+
+# ── NEW FIVE-CANDLE PATTERNS ─────────────────────────────────────────
+
+def fb_detect_mat_hold_bullish(df, idx, cfg=None):
+    """Mat Hold (Bullish): long bullish → small bearish candles that gap up
+    and stay within first candle's range → another long bullish closing
+    above first candle's close. Bullish Continuation (stronger than Rising Three)."""
+    if cfg is None: cfg = CFG
+    if idx < 4: return False
+    first = df.iloc[idx-4]; fifth = df.iloc[idx]
+    if first['BODY_SIGN'] != 1 or first['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7): return False
+    gap_tol = cfg.get('gap_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    for i in range(1, 4):
+        c = df.iloc[idx-4+i]
+        if c['BODY_RATIO'] > cfg.get('small_candle_ratio', 0.35) + 0.15: return False
+        if c['HIGH'] > first['HIGH'] or c['LOW'] < first['LOW']: return False
+        # Mat Hold: second candle must gap up from first
+        if i == 1 and c['LOW'] < first['CLOSE'] - gap_tol: return False
+    if fifth['BODY_SIGN'] != 1 or fifth['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.7: return False
+    if fifth['CLOSE'] <= first['CLOSE']: return False
+    return True
+
+def fb_detect_mat_hold_bearish(df, idx, cfg=None):
+    """Mat Hold (Bearish): long bearish → small bullish candles that gap down
+    and stay within first candle's range → another long bearish closing
+    below first candle's close. Bearish Continuation."""
+    if cfg is None: cfg = CFG
+    if idx < 4: return False
+    first = df.iloc[idx-4]; fifth = df.iloc[idx]
+    if first['BODY_SIGN'] != -1 or first['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7): return False
+    gap_tol = cfg.get('gap_tolerance_pips', 2) * cfg.get('pip_divisor', 0.0001)
+    for i in range(1, 4):
+        c = df.iloc[idx-4+i]
+        if c['BODY_RATIO'] > cfg.get('small_candle_ratio', 0.35) + 0.15: return False
+        if c['HIGH'] > first['HIGH'] or c['LOW'] < first['LOW']: return False
+        if i == 1 and c['HIGH'] > first['CLOSE'] + gap_tol: return False
+    if fifth['BODY_SIGN'] != -1 or fifth['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.7: return False
+    if fifth['CLOSE'] >= first['CLOSE']: return False
+    return True
+
+def fb_detect_ladder_bottom(df, idx, cfg=None):
+    """Ladder Bottom: three consecutive long bearish candles → small bearish/bullish
+    candle → long bullish candle. Bullish Reversal (buying pressure taking over)."""
+    if cfg is None: cfg = CFG
+    if idx < 4: return False
+    c1, c2, c3, c4, c5 = df.iloc[idx-4], df.iloc[idx-3], df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
+    # First three: long bearish with progressive lower closes
+    if c1['BODY_SIGN'] != -1 or c2['BODY_SIGN'] != -1 or c3['BODY_SIGN'] != -1: return False
+    if c1['BODY_RATIO'] < 0.4 or c2['BODY_RATIO'] < 0.4 or c3['BODY_RATIO'] < 0.4: return False
+    if not (c3['CLOSE'] < c2['CLOSE'] < c1['CLOSE']): return False
+    # Fourth: small-bodied candle
+    if c4['BODY_RATIO'] > cfg.get('small_candle_ratio', 0.35) + 0.15: return False
+    # Fifth: long bullish
+    if c5['BODY_SIGN'] != 1: return False
+    if c5['BODY_RATIO'] < cfg.get('long_candle_ratio', 0.7) * 0.6: return False
+    return True
+
+
+# ── THESTRAT PATTERN DETECTION ────────────────────────────────────────
+
+def thestrat_classify_candle(df, idx, cfg=None):
+    """Classify a candle using TheStrat 1-2-3 system.
+
+    Returns:
+        '1'  — Inside bar:  current high ≤ previous high AND current low ≥ previous low
+        '2↑' — Directional up: current high > previous high AND current low ≥ previous low
+        '2↓' — Directional down: current low < previous low AND current high ≤ previous high
+        '3'  — Outside bar: current high > previous high AND current low < previous low
+        None — If idx < 1 or data invalid
+    """
+    if idx < 1: return None
+    c = df.iloc[idx]; p = df.iloc[idx-1]
+    broke_high = c['HIGH'] > p['HIGH']
+    broke_low  = c['LOW']  < p['LOW']
+    if broke_high and broke_low:
+        return '3'      # Outside bar
+    elif broke_high and not broke_low:
+        return '2↑'     # Directional up
+    elif broke_low and not broke_high:
+        return '2↓'     # Directional down
+    else:
+        return '1'      # Inside bar
+
+def fb_detect_thestrat_22(df, idx, cfg=None):
+    """TheStrat 2-2 Pattern: Two consecutive Type 2 candles.
+    Can be continuation (same direction) or reversal (opposite direction).
+
+    Returns dict with Pattern/Category/Direction or None.
+    """
+    if idx < 2: return None
+    t1 = thestrat_classify_candle(df, idx-1, cfg)
+    t2 = thestrat_classify_candle(df, idx, cfg)
+    if t1 not in ('2↑', '2↓') or t2 not in ('2↑', '2↓'): return None
+
+    if t1 == t2:
+        # Same direction → continuation
+        d = 'Bullish' if t2 == '2↑' else 'Bearish'
+        return {'Pattern': 'TheStrat 2-2', 'Category': f'{d} Continuation', 'Direction': d, 'Candles': 2}
+    else:
+        # Opposite direction → reversal
+        d = 'Bullish' if t2 == '2↑' else 'Bearish'
+        return {'Pattern': 'TheStrat 2-2', 'Category': f'{d} Reversal', 'Direction': d, 'Candles': 2}
+
+def fb_detect_thestrat_312(df, idx, cfg=None):
+    """TheStrat 3-1-2 Reversal: Type 3 (outside) → Type 1 (inside) → Type 2 (directional breakout).
+    Direction is set by the final Type 2 candle's direction."""
+    if idx < 3: return None
+    t3 = thestrat_classify_candle(df, idx-2, cfg)  # First candle: Type 3
+    t1 = thestrat_classify_candle(df, idx-1, cfg)  # Second: Type 1
+    t2 = thestrat_classify_candle(df, idx, cfg)     # Third: Type 2
+    if t3 != '3' or t1 != '1' or t2 not in ('2↑', '2↓'): return None
+    d = 'Bullish' if t2 == '2↑' else 'Bearish'
+    return {'Pattern': 'TheStrat 3-1-2', 'Category': f'{d} Reversal', 'Direction': d, 'Candles': 3}
+
+def fb_detect_thestrat_212(df, idx, cfg=None):
+    """TheStrat 2-1-2 Reversal: Type 2 (directional) → Type 1 (inside) → Type 2 (directional breakout).
+    Direction is set by the final Type 2 candle's direction."""
+    if idx < 3: return None
+    t2a = thestrat_classify_candle(df, idx-2, cfg)
+    t1  = thestrat_classify_candle(df, idx-1, cfg)
+    t2b = thestrat_classify_candle(df, idx, cfg)
+    if t2a not in ('2↑', '2↓') or t1 != '1' or t2b not in ('2↑', '2↓'): return None
+    d = 'Bullish' if t2b == '2↑' else 'Bearish'
+    return {'Pattern': 'TheStrat 2-1-2', 'Category': f'{d} Reversal', 'Direction': d, 'Candles': 3}
+
+def fb_detect_thestrat_122_rev(df, idx, cfg=None):
+    """TheStrat 1-2-2 Rev: Type 1 (inside) → Type 2 (breakout) → Type 2 (reversal).
+    The third candle must be in the opposite direction from the second.
+    Direction is set by the third candle."""
+    if idx < 3: return None
+    t1  = thestrat_classify_candle(df, idx-2, cfg)
+    t2a = thestrat_classify_candle(df, idx-1, cfg)
+    t2b = thestrat_classify_candle(df, idx, cfg)
+    if t1 != '1' or t2a not in ('2↑', '2↓') or t2b not in ('2↑', '2↓'): return None
+    # Must be opposite directions for reversal
+    if t2a == t2b: return None
+    d = 'Bullish' if t2b == '2↑' else 'Bearish'
+    return {'Pattern': 'TheStrat 1-2-2 Rev', 'Category': f'{d} Reversal', 'Direction': d, 'Candles': 3}
+
+def fb_detect_thestrat_13_rev(df, idx, cfg=None):
+    """TheStrat 1-3 Rev: Type 1 (inside) → Type 3 (outside/broadening).
+    A broadening formation suggests reversal potential.
+    Direction is inferred from where price goes after the outside bar.
+    We use the outside bar's body direction as a hint."""
+    if idx < 2: return None
+    t1 = thestrat_classify_candle(df, idx-1, cfg)
+    t3 = thestrat_classify_candle(df, idx, cfg)
+    if t1 != '1' or t3 != '3': return None
+    c = df.iloc[idx]
+    # Use body direction as a hint for the likely direction
+    d = 'Bullish' if c['CLOSE'] >= c['OPEN'] else 'Bearish'
+    return {'Pattern': 'TheStrat 1-3 Rev', 'Category': f'{d} Reversal', 'Direction': d, 'Candles': 2}
+
+
 def fb_detect_rising_three_methods(df, idx, cfg=None):
     if cfg is None: cfg = CFG
     if idx < 4: return False
@@ -2739,13 +3268,20 @@ def fb_detect_all_patterns(df, cfg=None, d1_df=None, tf_label='H4', htf_atr_df=N
         row   = df.iloc[idx]
         found = []
 
+        # ── Single-candle: Neutral ──
         if fb_detect_doji(df, idx, cfg):
             found.append({'Pattern': 'Doji', 'Category': 'Neutral', 'Direction': 'Neutral', 'Candles': 1})
+        if fb_detect_dragonfly_doji(df, idx, cfg):
+            found.append({'Pattern': 'Dragonfly Doji', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 1})
+        if fb_detect_gravestone_doji(df, idx, cfg):
+            found.append({'Pattern': 'Gravestone Doji', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 1})
         if fb_detect_spinning_top(df, idx, cfg):
             found.append({'Pattern': 'Spinning Top', 'Category': 'Neutral', 'Direction': 'Neutral', 'Candles': 1})
         if fb_detect_marubozu(df, idx, cfg):
             d = 'Bullish' if row['BODY_SIGN'] == 1 else 'Bearish'
             found.append({'Pattern': f'Marubozu ({d})', 'Category': f'{d} Continuation', 'Direction': d, 'Candles': 1})
+
+        # ── Single-candle: Directional (trend-context required) ──
         if fb_detect_hammer(df, idx, cfg):
             found.append({'Pattern': 'Hammer', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 1})
         if fb_detect_inverted_hammer(df, idx, cfg):
@@ -2754,7 +3290,12 @@ def fb_detect_all_patterns(df, cfg=None, d1_df=None, tf_label='H4', htf_atr_df=N
             found.append({'Pattern': 'Shooting Star', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 1})
         if fb_detect_hanging_man(df, idx, cfg):
             found.append({'Pattern': 'Hanging Man', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 1})
+        if fb_detect_bullish_belt_hold(df, idx, cfg):
+            found.append({'Pattern': 'Bullish Belt Hold', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 1})
+        if fb_detect_bearish_belt_hold(df, idx, cfg):
+            found.append({'Pattern': 'Bearish Belt Hold', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 1})
 
+        # ── Two-candle patterns ──
         eng = fb_detect_engulfing(df, idx, cfg)
         if eng:
             d = 'Bullish' if 'Bullish' in eng else 'Bearish'
@@ -2775,6 +3316,26 @@ def fb_detect_all_patterns(df, cfg=None, d1_df=None, tf_label='H4', htf_atr_df=N
             d = 'Bearish' if 'Tops' in tw else 'Bullish'
             found.append({'Pattern': tw, 'Category': f'{d} Reversal', 'Direction': d, 'Candles': 2})
 
+        if fb_detect_piercing_line(df, idx, cfg):
+            found.append({'Pattern': 'Piercing Line', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 2})
+        if fb_detect_dark_cloud_cover(df, idx, cfg):
+            found.append({'Pattern': 'Dark Cloud Cover', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 2})
+        if fb_detect_bullish_kicker(df, idx, cfg):
+            found.append({'Pattern': 'Bullish Kicker', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 2})
+        if fb_detect_bearish_kicker(df, idx, cfg):
+            found.append({'Pattern': 'Bearish Kicker', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 2})
+        if fb_detect_meeting_lines_bullish(df, idx, cfg):
+            found.append({'Pattern': 'Meeting Lines (Bullish)', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 2})
+        if fb_detect_meeting_lines_bearish(df, idx, cfg):
+            found.append({'Pattern': 'Meeting Lines (Bearish)', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 2})
+        if fb_detect_bullish_separating_lines(df, idx, cfg):
+            found.append({'Pattern': 'Bullish Separating Lines', 'Category': 'Bullish Continuation', 'Direction': 'Bullish', 'Candles': 2})
+        if fb_detect_bearish_separating_lines(df, idx, cfg):
+            found.append({'Pattern': 'Bearish Separating Lines', 'Category': 'Bearish Continuation', 'Direction': 'Bearish', 'Candles': 2})
+        if fb_detect_bearish_doji_star(df, idx, cfg):
+            found.append({'Pattern': 'Bearish Doji Star', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 2})
+
+        # ── Three-candle patterns ──
         if fb_detect_morning_star(df, idx, cfg):
             found.append({'Pattern': 'Morning Star', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 3})
         if fb_detect_evening_star(df, idx, cfg):
@@ -2783,10 +3344,58 @@ def fb_detect_all_patterns(df, cfg=None, d1_df=None, tf_label='H4', htf_atr_df=N
             found.append({'Pattern': 'Three White Soldiers', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 3})
         if fb_detect_three_black_crows(df, idx, cfg):
             found.append({'Pattern': 'Three Black Crows', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 3})
+        if fb_detect_three_inside_up(df, idx, cfg):
+            found.append({'Pattern': 'Three Inside Up', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 3})
+        if fb_detect_three_inside_down(df, idx, cfg):
+            found.append({'Pattern': 'Three Inside Down', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 3})
+        if fb_detect_three_outside_up(df, idx, cfg):
+            found.append({'Pattern': 'Three Outside Up', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 3})
+        if fb_detect_three_outside_down(df, idx, cfg):
+            found.append({'Pattern': 'Three Outside Down', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 3})
+        if fb_detect_bullish_abandoned_baby(df, idx, cfg):
+            found.append({'Pattern': 'Bullish Abandoned Baby', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 3})
+        if fb_detect_bearish_abandoned_baby(df, idx, cfg):
+            found.append({'Pattern': 'Bearish Abandoned Baby', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 3})
+        if fb_detect_upside_gap_two_crows(df, idx, cfg):
+            found.append({'Pattern': 'Upside Gap Two Crows', 'Category': 'Bearish Reversal', 'Direction': 'Bearish', 'Candles': 3})
+
+        # ── Four-candle patterns ──
+        if fb_detect_bullish_three_line_strike(df, idx, cfg):
+            found.append({'Pattern': 'Bullish Three-Line Strike', 'Category': 'Bullish Continuation', 'Direction': 'Bullish', 'Candles': 4})
+        if fb_detect_bearish_three_line_strike(df, idx, cfg):
+            found.append({'Pattern': 'Bearish Three-Line Strike', 'Category': 'Bearish Continuation', 'Direction': 'Bearish', 'Candles': 4})
+        if fb_detect_concealing_baby_swallow(df, idx, cfg):
+            found.append({'Pattern': 'Concealing Baby Swallow', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 4})
+
+        # ── Five-candle patterns ──
         if fb_detect_rising_three_methods(df, idx, cfg):
             found.append({'Pattern': 'Rising Three Methods', 'Category': 'Bullish Continuation', 'Direction': 'Bullish', 'Candles': 5})
         if fb_detect_falling_three_methods(df, idx, cfg):
             found.append({'Pattern': 'Falling Three Methods', 'Category': 'Bearish Continuation', 'Direction': 'Bearish', 'Candles': 5})
+        if fb_detect_mat_hold_bullish(df, idx, cfg):
+            found.append({'Pattern': 'Mat Hold (Bullish)', 'Category': 'Bullish Continuation', 'Direction': 'Bullish', 'Candles': 5})
+        if fb_detect_mat_hold_bearish(df, idx, cfg):
+            found.append({'Pattern': 'Mat Hold (Bearish)', 'Category': 'Bearish Continuation', 'Direction': 'Bearish', 'Candles': 5})
+        if fb_detect_ladder_bottom(df, idx, cfg):
+            found.append({'Pattern': 'Ladder Bottom', 'Category': 'Bullish Reversal', 'Direction': 'Bullish', 'Candles': 5})
+
+        # ── TheStrat composite patterns ──
+        if cfg.get('thestrat_enabled', True):
+            ts22 = fb_detect_thestrat_22(df, idx, cfg)
+            if ts22:
+                found.append(ts22)
+            ts312 = fb_detect_thestrat_312(df, idx, cfg)
+            if ts312:
+                found.append(ts312)
+            ts212 = fb_detect_thestrat_212(df, idx, cfg)
+            if ts212:
+                found.append(ts212)
+            ts122 = fb_detect_thestrat_122_rev(df, idx, cfg)
+            if ts122:
+                found.append(ts122)
+            ts13 = fb_detect_thestrat_13_rev(df, idx, cfg)
+            if ts13:
+                found.append(ts13)
 
         # Deduplicate
         if cfg.get('deduplicate_signals', True):
@@ -3506,7 +4115,7 @@ def run_scanner(cfg=None):
         log_message(f"Multi-symbol watchlist: {', '.join(watchlist)}", cfg)
 
     log_message(C('cyan', '=' * 70), cfg)
-    log_message(C('bold', f"  {symbol} MULTI-TIMEFRAME PATTERN SCANNER v8 — STARTING"), cfg)
+    log_message(C('bold', f"  {symbol} MULTI-TIMEFRAME PATTERN SCANNER v9 — STARTING"), cfg)
     log_message(C('cyan', '=' * 70), cfg)
     watchlist_display = ', '.join(cfg.get('watchlist', [symbol]))
     if len(cfg.get('watchlist', [])) > 1:
@@ -3842,7 +4451,7 @@ def run_full_backtest(args, cfg=None):
     out_dir    = args.output
 
     print("=" * 70)
-    print(f"  {symbol} MULTI-TIMEFRAME BACKTESTER v8")
+    print(f"  {symbol} MULTI-TIMEFRAME BACKTESTER v9")
     print("=" * 70)
     print(f"  Timeframes : {', '.join(active_tfs)}")
     print(f"  From       : {args.date_from}")
@@ -4020,6 +4629,7 @@ def run_full_backtest(args, cfg=None):
     try:
         combined_stats = {'symbol': symbol, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                           'backtest_range': f"{args.date_from} to {args.date_to}",
+                          'broker_utc_offset': cfg.get('broker_utc_offset', 2),
                           'timeframes': {}}
         for tf_label, dets in all_results.items():
             if not dets: continue
@@ -4128,27 +4738,27 @@ def run_full_backtest(args, cfg=None):
 def parse_args(cfg=None):
     if cfg is None: cfg = CFG
     p = argparse.ArgumentParser(
-        description="MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v8",
+        description="MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v9",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""
 Examples:
   # Live scanner — all timeframes
-  python mt5_multitf_pattern_scanner_v8.py
+  python mt5_multitf_pattern_scanner.py
 
   # Live scanner — specific timeframes
-  python mt5_multitf_pattern_scanner_v8.py --timeframes M5 H1 H4
+  python mt5_multitf_pattern_scanner.py --timeframes M5 H1 H4
 
   # One-shot scan
-  python mt5_multitf_pattern_scanner_v8.py --mode scan
+  python mt5_multitf_pattern_scanner.py --mode scan
 
   # Quick backtest (500 bars) on H4 only
-  python mt5_multitf_pattern_scanner_v8.py --mode backtest --bars 500 --timeframes H4
+  python mt5_multitf_pattern_scanner.py --mode backtest --bars 500 --timeframes H4
 
   # Full backtest on all TFs, 2024 full year
-  python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --from 2024-01-01 --to 2024-12-31
+  python mt5_multitf_pattern_scanner.py --mode fullbacktest --from 2024-01-01 --to 2024-12-31
 
   # Full backtest with filters on H4 only
-  python mt5_multitf_pattern_scanner_v8.py --mode fullbacktest --timeframes H4 \\
+  python mt5_multitf_pattern_scanner.py --mode fullbacktest --timeframes H4 \\
       --d1-trend-filter --volume-filter --forward 15
         """
     )

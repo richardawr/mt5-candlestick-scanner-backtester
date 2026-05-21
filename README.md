@@ -1,4 +1,4 @@
-# MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v8
+# MT5 Multi-Timeframe Candlestick Pattern Scanner & Backtester v9
 
 A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candlestick patterns, backtest their performance with realistic entry/exit simulation, and run a live scanner that scores and alerts when a new pattern appears.
 
@@ -6,7 +6,7 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 
 ## Features
 
-- **20+ patterns**: Doji, Hammer, Shooting Star, Engulfing, Morning/Evening Star, Three White Soldiers, Three Black Crows, Marubozu, Harami, Tweezers, Rising/Falling Three Methods, Inverted Hammer, and more
+- **50+ patterns**: classic single-candle (Doji, Dragonfly Doji, Gravestone Doji, Hammer, Shooting Star, Marubozu, Belt Hold, Inverted Hammer, Hanging Man, Spinning Top), two-candle (Engulfing, Near Engulfing, Harami, Kicker, Piercing Line, Dark Cloud Cover, Tweezers, Meeting Lines, Separating Lines, Doji Star), three-candle (Morning/Evening Star, Three White Soldiers, Three Black Crows, Three Inside Up/Down, Three Outside Up/Down, Abandoned Baby, Upside Gap Two Crows), four-candle (Three Line Strike, Concealing Baby Swallow), five-candle (Rising/Falling Three Methods, Mat Hold, Ladder Bottom), and **TheStrat** composite patterns (2-2, 3-1-2, 2-1-2, 1-2-2 Rev, 1-3 Rev)
 - **Multi-timeframe backtesting** — backtest all 5 timeframes in a single run with per-TF statistics
 - **Trade management modes** — `fixed` (static SL/TP), `breakeven` (move SL to entry at 1R), `trail` (ATR-based trailing stop), `partial` (close 50% at 1R, trail remainder)
 - **Structure-based SL placement** — place stops at pattern invalidation levels (below Hammer low, below Engulfing candle extreme, etc.) instead of generic ATR offsets
@@ -40,8 +40,10 @@ A comprehensive tool to scan **M5, M15, H1, H4, D1** charts for classical candle
 - **Session classification** (Asia, Pacific, London Open, London Morning, London/NY Overlap, NY Afternoon)
 - **Full backtests** over date ranges — CSV reports, summary tables, JSON stats cache, and text reports
 - **Live scanner** — monitors all active timeframes and prints formatted alerts when a new candle closes
-- **Sound alerts** (Windows only) — high-Hz triple beep for STRONG BUY, low-Hz triple beep for STRONG SELL; starts muted, type `m` + Enter to toggle
+- **Tier-aware sound alerts** (Windows only) — high-Hz triple beep for STRONG BUY, low-Hz triple beep for STRONG SELL; Tier A (Elite) always fires, Tier B only if score ≥ `sound_alert_tier_b_min_score` (default 60), Tier C/D never; starts muted, type `m` + Enter to toggle
 - **Position sizing** (risk-based, standard lots) displayed in alerts
+- **Auto-detected broker UTC offset** — broker UTC offset is auto-detected at startup by comparing the latest MT5 candle time against true UTC; handles DST transitions automatically; falls back to `broker_utc_offset` config value if detection fails
+- **Local time display** — candle close times and "Next close" countdowns are converted from broker time to local machine time for display; log timestamps always use local time
 - **Auto-reconnect** with exponential backoff if MT5 connection drops
 
 ---
@@ -197,8 +199,12 @@ The scanner includes Windows-only sound alerts so you don't have to stare at the
 
 ### How it works
 
-- **STRONG BUY** (Bullish signal with score >= 65) — triple high-Hz beep (1200 Hz by default)
-- **STRONG SELL** (Bearish signal with score >= 65) — triple low-Hz beep (400 Hz by default)
+- **STRONG BUY** (Bullish signal) — triple high-Hz beep (1200 Hz by default)
+- **STRONG SELL** (Bearish signal) — triple low-Hz beep (400 Hz by default)
+- **Tier-aware triggering** — which patterns fire an alert depends on their tier:
+  - **Tier A (Elite)** — always triggers a sound alert
+  - **Tier B (Tradeable)** — triggers only if the signal score ≥ `sound_alert_tier_b_min_score` (default 60)
+  - **Tier C / D** — never triggers sound alerts
 - The scanner starts **muted** — you must explicitly unmute to hear alerts
 - Type `m` + Enter in the terminal to toggle mute/unmute at any time
 - The keyboard listener runs in a background thread, so there is no delay — it responds instantly
@@ -208,7 +214,7 @@ The scanner includes Windows-only sound alerts so you don't have to stare at the
 When the live scanner starts with sound enabled, you will see:
 
 ```
-Sound Alerts: ENABLED | Buy: 1200Hz | Sell: 400Hz | Threshold: 65
+Sound Alerts: ENABLED | Buy: 1200Hz | Sell: 400Hz | Alert Tier: B (score >= 60)
 Sound is MUTED — Type "m" + Enter to unmute
 ```
 
@@ -242,7 +248,64 @@ These settings are in the `CFG` dict at the top of the script (not exposed as CL
 | `sound_sell_hz` | `400` | Frequency in Hz for STRONG SELL triple beep |
 | `sound_beep_duration` | `150` | Duration of each individual beep in milliseconds |
 | `sound_beep_pause` | `100` | Pause between beeps in milliseconds |
-| `sound_strong_threshold` | `65.0` | Signal score must be >= this to trigger a sound alert |
+| `sound_alert_tier` | `'B'` | Minimum tier to trigger sound: `'A'` (Elite only), `'B'` (Tradeable+), `'C'` (all directional) |
+| `sound_alert_tier_b_min_score` | `60.0` | Minimum signal score for Tier B patterns to trigger a sound alert |
+
+---
+
+## v9 Enhancements
+
+### Massively Expanded Pattern Library (50+)
+
+v9 adds 30+ new patterns across all candle counts, bringing the total to 50+:
+
+**New single-candle patterns**: Dragonfly Doji, Gravestone Doji, Bullish Belt Hold, Bearish Belt Hold
+
+**New two-candle patterns**: Near Engulfing, Piercing Line, Dark Cloud Cover, Bullish Kicker, Bearish Kicker, Meeting Lines (Bullish/Bearish), Bullish/Bearish Separating Lines, Bearish Doji Star
+
+**New three-candle patterns**: Three Inside Up, Three Inside Down, Three Outside Up, Three Outside Down, Bullish Abandoned Baby, Bearish Abandoned Baby, Upside Gap Two Crows
+
+**New four-candle patterns**: Bullish/Bearish Three Line Strike, Concealing Baby Swallow
+
+**New five-candle patterns**: Mat Hold (Bullish/Bearish), Ladder Bottom
+
+**TheStrat composite patterns**: 2-2 Continuation/Reversal, 3-1-2 Reversal, 2-1-2 Reversal, 1-2-2 Reversal, 1-3 Reversal — based on Rob Smith's TheStrat candle-type system (Type 1 = inside bar, Type 2 = directional break, Type 3 = outside bar)
+
+New pattern thresholds are configurable in `CFG`:
+
+| Key | Default | Description |
+|---|---|---|
+| `belt_hold_wick_ratio` | `0.1` | Max wick/body ratio for belt hold patterns |
+| `kicker_min_body_ratio` | `0.6` | Min body ratio for kicker candles |
+| `separating_lines_tolerance_pips` | `2` | Open price tolerance for separating lines |
+| `meeting_lines_tolerance_pips` | `2` | Close price tolerance for meeting lines |
+
+### Tier-Aware Sound Alerts
+
+Sound alerts are now triggered based on pattern tier rather than a flat score threshold:
+
+| Tier | Alert condition |
+|---|---|
+| A: ELITE | Always fires a sound alert |
+| B: TRADEABLE | Fires only if signal score ≥ `sound_alert_tier_b_min_score` (default 60) |
+| C: MARGINAL | Never fires |
+| D: AVOID | Never fires |
+
+This replaces the old `sound_strong_threshold` (65.0) flat cutoff. Configure via `sound_alert_tier` and `sound_alert_tier_b_min_score` in `CFG`.
+
+### Auto-Detected Broker UTC Offset
+
+At live scanner startup, the broker's UTC offset is automatically detected by comparing the timestamp of the latest MT5 candle against true UTC. This means DST transitions are handled correctly without any manual configuration change.
+
+- The detected offset is logged at startup: `Timestamps: Local time (UTC+3, auto-detected broker UTC+3)`
+- If detection fails, falls back to the `broker_utc_offset` value in `CFG` (default: 2)
+- To disable auto-detection, set `broker_utc_offset` to `0` in `CFG`
+
+### Local Time Display
+
+Candle close times and "Next close" countdowns in the live scanner are now displayed in **local machine time** rather than broker server time. Log timestamps (`[HH:MM:SS]`) have always used local time — now the candle times match.
+
+The conversion formula is: `local = broker_time − broker_utc_offset + local_utc_offset`
 
 ---
 
@@ -511,6 +574,7 @@ ATR now uses Wilder's exponential smoothing (alpha = 1/period) instead of simple
 | `--risk-percent` | Risk % of account per trade | `1.0` |
 | `--min-signal-score` | Minimum signal score to display (0-100) | `0` |
 | `--alert-only-strong` | Only alert on strong signals | `False` |
+| `--broker-utc-offset` | Broker UTC offset (0 = auto-detect) | `2` |
 | `--test-sound` | Play STRONG BUY and STRONG SELL test beeps, then exit | |
 | `--output` | Backtest output directory | `./backtest_results` |
 
@@ -538,7 +602,8 @@ These are set in the `CFG` dict at the top of the script:
 | `sound_sell_hz` | `400` | Hz for STRONG SELL triple beep |
 | `sound_beep_duration` | `150` | Duration per beep in ms |
 | `sound_beep_pause` | `100` | Pause between beeps in ms |
-| `sound_strong_threshold` | `65.0` | Min signal score to trigger sound |
+| `sound_alert_tier` | `'B'` | Minimum tier to trigger sound: `'A'` (Elite only), `'B'` (Tradeable+), `'C'` (all directional) |
+| `sound_alert_tier_b_min_score` | `60.0` | Minimum score for Tier B patterns to trigger a sound alert |
 
 ### Pattern Thresholds
 
@@ -557,7 +622,7 @@ See `--help` for the full list of arguments.
 
 ---
 
-## Signal Scoring System (v7)
+## Signal Scoring System
 
 Each live signal is scored 0-100 based on:
 
@@ -645,6 +710,6 @@ Patterns below `--min-signal-score` are filtered out (default: 0, i.e. show all)
 ## Timezone Notes
 
 - Log timestamps (`[HH:MM:SS]`) use your **local computer time**
-- Candle close times and "Next:" candle times use **broker server time**
-- Session classification uses **broker server time** hours
-- This means candle times will differ from your local clock by your timezone offset
+- Candle close times and "Next:" candle times are converted to **local computer time** via the auto-detected broker UTC offset
+- Session classification uses **broker server time** hours internally
+- The broker UTC offset is auto-detected at startup; if detection fails, the `broker_utc_offset` config value is used (default: UTC+2)
