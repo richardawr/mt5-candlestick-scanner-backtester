@@ -3813,13 +3813,14 @@ def compute_equity_curve(detections, cfg=None):
     
     Simulates sequential trading with fixed position sizing (1R risk per trade),
     tracking cumulative P&L in R-multiples, then derives key metrics:
-      - Cumulative P&L curve
-      - Max drawdown (R and %)
-      - Sharpe ratio (annualised, assuming 252 trading days)
+      - Cumulative P&L curve (R and account currency)
+      - Max drawdown (R, % of account, % of peak equity)
+      - Sharpe ratio (annualised, using actual trade frequency)
       - Calmar ratio (annualised return / max drawdown)
       - Max consecutive wins/losses
       - Profit factor (gross profit / gross loss)
       - Expectancy (average R per trade)
+      - Account currency equivalents (using risk_percent and account_balance)
     
     Returns dict with equity curve data and statistics, or None if insufficient data.
     """
@@ -3872,9 +3873,49 @@ def compute_equity_curve(detections, cfg=None):
     directional['Peak_R'] = directional['Cumulative_R'].cummax()
     directional['Drawdown_R'] = directional['Cumulative_R'] - directional['Peak_R']
     max_dd_r = directional['Drawdown_R'].min()
-    # Max drawdown percentage (relative to peak equity)
+    
+    # Max drawdown percentage — computed TWO ways:
+    # 1) Relative to peak cumulative R (can exceed 100%, useful in R-space)
     peak_at_dd = directional.loc[directional['Drawdown_R'].idxmin(), 'Peak_R'] if max_dd_r < 0 else 0
-    max_dd_pct = abs(max_dd_r / peak_at_dd * 100) if peak_at_dd > 0 else 0
+    max_dd_pct_of_peak = abs(max_dd_r / peak_at_dd * 100) if peak_at_dd > 0 else 0
+    # 2) Relative to starting account balance in R-units
+    #    1R = risk_percent% of account, so max_dd in account % = abs(max_dd_r) * risk_percent
+    #    This is the standard MaxDD% that traders expect (capped at 100% = account blown)
+    risk_pct = cfg.get('risk_percent', 1.0)
+    max_dd_pct = abs(max_dd_r) * risk_pct  # e.g. 595R * 1% = 595% of account
+    
+    # Also compute MaxDD% relative to peak equity as a "proper" drawdown metric
+    # (can never exceed 100% by definition: you can only lose what you have)
+    # For this we need a running equity that starts at a known balance, not 0R.
+    # Using cumulative R as if starting with 0, the "proper" peak-relative DD is:
+    if peak_at_dd > 0:
+        # trough = peak + drawdown => trough = peak_at_dd + max_dd_r
+        trough_at_dd = peak_at_dd + max_dd_r  # will be negative if DD > peak
+        # Proper DD% = (peak - trough) / peak * 100 = abs(max_dd_r) / peak_at_dd * 100
+        # But we also compute a "compounding-aware" version starting from 1R unit capital
+        # Simulate equity starting at 1.0 (1R capital), adding each trade's R-multiple
+        # This gives a more realistic drawdown picture
+        pass  # computed below after we have the compounding equity
+    
+    # ── Compounding equity simulation ──
+    # Simulate with a starting capital of 1R (1 unit of risk).
+    # Each trade risks risk_pct% of current equity.
+    # This gives realistic drawdown % that can never exceed 100%.
+    equity_compound = [1.0]  # Start with 1R capital
+    for r in r_multiples:
+        # P&L for this trade = r * risk_pct% of current equity
+        pnl = r * (risk_pct / 100.0) * equity_compound[-1]
+        equity_compound.append(equity_compound[-1] + pnl)
+    equity_compound = np.array(equity_compound[1:])  # remove initial 1.0, align with trades
+    
+    # Compounding drawdown
+    peak_compound = np.maximum.accumulate(equity_compound)
+    dd_compound = equity_compound - peak_compound
+    max_dd_compound_r = dd_compound.min()
+    peak_at_dd_compound = peak_compound[np.argmin(dd_compound)] if max_dd_compound_r < 0 else 1.0
+    max_dd_pct_compound = abs(max_dd_compound_r / peak_at_dd_compound * 100) if peak_at_dd_compound > 0 else 0
+    final_equity_compound = equity_compound[-1]
+    account_return_pct = (final_equity_compound - 1.0) * 100  # Total return % on starting 1R capital
     
     # Consecutive streaks
     wins = (directional['R_Multiple'] > 0).values
@@ -3911,18 +3952,32 @@ def compute_equity_curve(detections, cfg=None):
     # Expectancy
     expectancy = directional['R_Multiple'].mean()
     
-    # Sharpe ratio (annualised)
-    if directional['R_Multiple'].std() > 0:
-        # Assume ~4 trades per day average across all TFs
-        trades_per_year = 252 * 4
-        sharpe = (directional['R_Multiple'].mean() / directional['R_Multiple'].std()) * np.sqrt(trades_per_year)
+    total_trades = len(directional)
+    
+    # Sharpe ratio (annualised, using actual trade frequency from data)
+    r_std = directional['R_Multiple'].std()
+    r_mean = directional['R_Multiple'].mean()
+    if r_std > 0:
+        # Compute actual trades per year from the data date range
+        trades_per_year = 252 * 4  # fallback default
+        if 'DateTime' in directional.columns:
+            try:
+                dt_col = pd.to_datetime(directional['DateTime'], errors='coerce')
+                dt_col = dt_col.dropna()
+                if len(dt_col) >= 2:
+                    date_range_years = (dt_col.iloc[-1] - dt_col.iloc[0]).total_seconds() / (365.25 * 24 * 3600)
+                    if date_range_years > 0.01:  # at least ~4 days of data
+                        trades_per_year = total_trades / date_range_years
+            except Exception:
+                pass
+        sharpe = (r_mean / r_std) * np.sqrt(trades_per_year)
     else:
         sharpe = 0.0
     
     # Calmar ratio (annualised return / max drawdown)
-    total_trades = len(directional)
-    annual_return = directional['Cumulative_R'].iloc[-1] * (252 * 4 / max(total_trades, 1))
-    calmar = annual_return / abs(max_dd_r) if max_dd_r != 0 else 0.0
+    # Use actual trades_per_year for annualization (consistent with Sharpe)
+    annual_return_r = directional['Cumulative_R'].iloc[-1] * (trades_per_year / max(total_trades, 1))
+    calmar = annual_return_r / abs(max_dd_r) if max_dd_r != 0 else 0.0
     
     # Win/loss statistics
     n_wins = int((directional['R_Multiple'] > 0).sum())
@@ -3930,23 +3985,39 @@ def compute_equity_curve(detections, cfg=None):
     avg_win = directional.loc[directional['R_Multiple'] > 0, 'R_Multiple'].mean() if n_wins > 0 else 0
     avg_loss = directional.loc[directional['R_Multiple'] < 0, 'R_Multiple'].mean() if n_losses > 0 else 0
     
+    # ── Account currency conversion ──
+    account_balance = cfg.get('account_balance', 100000)
+    risk_per_trade = account_balance * (risk_pct / 100.0)  # $ amount risked per trade = 1R
+    final_pnl_currency = directional['Cumulative_R'].iloc[-1] * risk_per_trade
+    max_dd_currency = abs(max_dd_r) * risk_per_trade
+    
     return {
         'total_trades': total_trades,
         'n_wins': n_wins,
         'n_losses': n_losses,
         'final_equity_r': round(directional['Cumulative_R'].iloc[-1], 2),
         'max_dd_r': round(max_dd_r, 2),
-        'max_dd_pct': round(max_dd_pct, 1),
+        'max_dd_pct': round(max_dd_pct, 1),          # % of starting account balance (abs(max_dd_r) * risk_pct)
+        'max_dd_pct_of_peak': round(max_dd_pct_of_peak, 1),  # % of peak cumulative R (can exceed 100%)
+        'max_dd_pct_compound': round(max_dd_pct_compound, 1), # % drawdown from compounding equity
+        'account_return_pct': round(account_return_pct, 1),   # Total return % on 1R capital (compounded)
         'max_consec_wins': max_consec_wins,
         'max_consec_losses': max_consec_losses,
         'profit_factor': round(profit_factor, 2),
         'expectancy': round(expectancy, 3),
         'sharpe': round(sharpe, 2),
+        'trades_per_year': round(trades_per_year, 0),  # Actual computed value
         'calmar': round(calmar, 2),
         'avg_win_r': round(avg_win, 3) if avg_win else 0,
         'avg_loss_r': round(avg_loss, 3) if avg_loss else 0,
         'gross_profit_r': round(gross_profit, 2),
         'gross_loss_r': round(gross_loss, 2),
+        # Account currency equivalents
+        'account_balance': account_balance,
+        'risk_percent': risk_pct,
+        'risk_per_trade': round(risk_per_trade, 2),
+        'final_pnl_currency': round(final_pnl_currency, 2),
+        'max_dd_currency': round(max_dd_currency, 2),
         'equity_curve': directional['Cumulative_R'].tolist(),
         'drawdown_curve': directional['Drawdown_R'].tolist(),
     }
