@@ -247,8 +247,10 @@ CFG = {
     },
 
     # ── Session Classifier ─────────────────────────────────────────
-    'broker_utc_offset':     2,      # UTC+2 broker server time (auto-detected at startup; set 0 to disable auto-detect)
-                                      # Typical: UTC+2 winter / UTC+3 summer (follows US DST for NY-close brokers)
+    'broker_utc_offset':     2,      # Standard (winter) UTC offset for NY-close brokers (GMT+2)
+                                      # DST is handled automatically via broker_dst_rule — do NOT set this
+                                      # to 3 for summer; the code adds +1 during US daylight saving.
+    'broker_dst_rule':       'us',   # DST rule: 'us' (2nd Sun Mar → 1st Sun Nov), 'eu', or 'none'
 
     # ── Signal Deduplication & Entry Verification ─────────────────
     'deduplicate_signals':   True,
@@ -538,14 +540,18 @@ def test_sound(cfg=None):
     print("")
 
 
-def broker_now():
-    """Return current local time for log timestamps.
+def local_now():
+    """Return current local machine time for log timestamps.
 
     Uses datetime.now() so log timestamps match the user's wall clock.
     Candle display times are converted to local time separately via
     to_local_time().
     """
     return datetime.now()
+
+
+# Backward-compatible alias (old name was misleading — returns local time, not broker time)
+broker_now = local_now
 
 
 def broker_time(ts):
@@ -564,15 +570,19 @@ def to_local_time(broker_dt, cfg=None):
 
     Formula:  local_time = broker_time - broker_utc_offset + local_utc_offset
 
-    The broker UTC offset comes from config (auto-detected at startup).
-    The local UTC offset is computed from the system clock (handles DST
-    automatically).
+    The broker UTC offset is date-aware (accounts for US DST transitions).
+    The local UTC offset is computed from the system clock (handles local
+    DST automatically).
     """
     if cfg is None:
         cfg = CFG
-    broker_offset = cfg.get('broker_utc_offset', 2)
-    local_offset_td = datetime.now() - datetime.utcnow()
-    return broker_dt - timedelta(hours=broker_offset) + local_offset_td
+    # Date-aware broker offset (handles GMT+2/GMT+3 DST)
+    broker_offset = get_broker_offset_for_date(broker_dt, cfg)
+    # Modern replacement for deprecated datetime.utcnow()
+    local_offset = datetime.now().astimezone().utcoffset()
+    if local_offset is None:
+        local_offset = timedelta(0)
+    return broker_dt - timedelta(hours=broker_offset) + local_offset
 
 
 def auto_detect_broker_offset(cfg=None):
@@ -591,10 +601,9 @@ def auto_detect_broker_offset(cfg=None):
         symbol = cfg.get('symbol', 'EURUSD')
         rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 1)
         if rates is not None and len(rates) > 0:
-            broker_clock = datetime.fromtimestamp(
-                int(rates[-1]['time']), tz=timezone.utc
-            ).replace(tzinfo=None)
-            utc_now = datetime.utcnow()
+            # Use timezone-aware UTC comparison (no deprecated datetime.utcnow())
+            broker_clock = datetime.fromtimestamp(int(rates[-1]['time']), tz=timezone.utc)
+            utc_now = datetime.now(timezone.utc)
             diff_hours = (broker_clock - utc_now).total_seconds() / 3600
             detected = round(diff_hours)
             if abs(detected - diff_hours) < 0.5:
@@ -624,26 +633,91 @@ def log_message(msg, cfg=None):
             pass
 
 
-def classify_session(hour, cfg=None):
-    """Classify broker-time hour into a trading session."""
+def get_broker_offset_for_date(dt, cfg=None):
+    """Return the broker's UTC offset for a specific date, accounting for DST.
+
+    NY-close brokers follow US DST: GMT+2 (standard) / GMT+3 (daylight).
+    US DST: 2nd Sunday of March → 1st Sunday of November.
+
+    For brokers that don't follow US DST (e.g. Asian brokers at UTC+8),
+    set broker_dst_rule='none' in CFG.
+
+    Args:
+        dt: datetime (naive broker-time, or any date-aware datetime)
+        cfg: configuration dict
+    Returns:
+        Integer UTC offset (e.g. 2 or 3)
+    """
     if cfg is None:
         cfg = CFG
-    offset = cfg.get('broker_utc_offset', 2)
-    utc_hour = (hour - offset) % 24
-    if 0 <= utc_hour < 7:
-        return 'Asia'
-    elif 7 <= utc_hour < 9:
-        return 'London Open'
-    elif 9 <= utc_hour < 12:
-        return 'London Morning'
-    elif 12 <= utc_hour < 16:
-        return 'London/NY Overlap'
-    elif 16 <= utc_hour < 20:
-        return 'NY Afternoon'
-    elif 20 <= utc_hour < 24:
-        return 'Pacific'
+    base_offset = cfg.get('broker_utc_offset', 2)
+    dst_rule = cfg.get('broker_dst_rule', 'us')
+
+    if dst_rule != 'us' or base_offset != 2:
+        # No DST adjustment for non-NY-close brokers or non-standard offsets
+        return base_offset
+
+    # ── US DST calculation ──
+    date = dt.date() if isinstance(dt, datetime) else dt
+    year = date.year
+
+    # 2nd Sunday of March
+    mar1 = datetime(year, 3, 1)
+    dow_mar1 = mar1.weekday()  # 0=Mon .. 6=Sun
+    days_to_first_sun = (6 - dow_mar1) % 7
+    second_sunday_mar = mar1 + timedelta(days=days_to_first_sun + 7)
+    spring_date = second_sunday_mar.date()
+
+    # 1st Sunday of November
+    nov1 = datetime(year, 11, 1)
+    dow_nov1 = nov1.weekday()
+    days_to_first_sun_nov = (6 - dow_nov1) % 7
+    first_sunday_nov = nov1 + timedelta(days=days_to_first_sun_nov)
+    fall_date = first_sunday_nov.date()
+
+    if spring_date <= date < fall_date:
+        return base_offset + 1  # Daylight saving: GMT+3
+
+    return base_offset  # Standard: GMT+2
+
+
+def classify_session(broker_hour, broker_dt=None, cfg=None):
+    """Classify broker-time hour into a trading session.
+
+    Standard forex session boundaries (UTC):
+      Pacific:          21:00 – 00:00   Sydney open
+      Asia:             00:00 – 07:00   Tokyo active
+      London Open:      07:00 – 09:00   London open + Tokyo/London overlap
+      London Morning:   09:00 – 13:00   London active
+      London/NY Overlap: 13:00 – 16:00  Highest volume window
+      NY Afternoon:     16:00 – 21:00   NY active, London closed
+
+    If broker_dt is provided, uses date-aware DST offset for accurate
+    session classification across DST transitions (GMT+2/GMT+3).
+    Otherwise falls back to the configured broker_utc_offset.
+    """
+    if cfg is None:
+        cfg = CFG
+    # Date-aware offset: handles GMT+2 winter / GMT+3 summer
+    if broker_dt is not None:
+        offset = get_broker_offset_for_date(broker_dt, cfg)
     else:
-        return 'Unknown'
+        offset = cfg.get('broker_utc_offset', 2)
+    utc_hour = (broker_hour - offset) % 24
+
+    # Classify by UTC hour — matches standard forex session times
+    if utc_hour >= 21:                  # 21:00 – 23:59  Sydney open
+        return 'Pacific'
+    elif utc_hour < 7:                  # 00:00 – 07:00  Tokyo active
+        return 'Asia'
+    elif utc_hour < 9:                  # 07:00 – 09:00  Tokyo/London overlap
+        return 'London Open'
+    elif utc_hour < 13:                 # 09:00 – 13:00  London active
+        return 'London Morning'
+    elif utc_hour < 16:                 # 13:00 – 16:00  London/NY overlap
+        return 'London/NY Overlap'
+    else:                               # 16:00 – 21:00  NY active
+        return 'NY Afternoon'
 
 
 def deduplicate_patterns(patterns, cfg=None):
@@ -1830,12 +1904,15 @@ def scan_patterns(rates, cfg=None, d1_rates=None, tf_label='H4', htf_atr_rates=N
 
     _ct = curr['time']
     if isinstance(_ct, (int, float, np.integer, np.floating)):
-        hour = broker_time(int(_ct)).hour
+        bt = broker_time(int(_ct))
+        hour = bt.hour
     elif hasattr(_ct, 'hour'):
+        bt = _ct
         hour = _ct.hour
     else:
+        bt = None
         hour = int(_ct) % 24
-    session = classify_session(hour, cfg)
+    session = classify_session(hour, bt, cfg)
 
     # Volume confirmation (DataFrame-based, matching backtest logic)
     vol_confirmed = True
@@ -3711,7 +3788,7 @@ def fb_compute_details(df, idx, pinfo, current_atr, sl_mult, tp_mult,
 
     # ── Context analysis: S/R, RSI, confluence ──────────────────────
     hour    = row['DATETIME'].hour
-    session = classify_session(hour, cfg)
+    session = classify_session(hour, row['DATETIME'], cfg)
     trend   = fb_detect_trend(df, idx, cfg)
 
     # Support/Resistance context
@@ -3813,14 +3890,13 @@ def compute_equity_curve(detections, cfg=None):
     
     Simulates sequential trading with fixed position sizing (1R risk per trade),
     tracking cumulative P&L in R-multiples, then derives key metrics:
-      - Cumulative P&L curve (R and account currency)
-      - Max drawdown (R, % of account, % of peak equity)
-      - Sharpe ratio (annualised, using actual trade frequency)
+      - Cumulative P&L curve
+      - Max drawdown (R and %)
+      - Sharpe ratio (annualised, assuming 252 trading days)
       - Calmar ratio (annualised return / max drawdown)
       - Max consecutive wins/losses
       - Profit factor (gross profit / gross loss)
       - Expectancy (average R per trade)
-      - Account currency equivalents (using risk_percent and account_balance)
     
     Returns dict with equity curve data and statistics, or None if insufficient data.
     """
@@ -3873,49 +3949,9 @@ def compute_equity_curve(detections, cfg=None):
     directional['Peak_R'] = directional['Cumulative_R'].cummax()
     directional['Drawdown_R'] = directional['Cumulative_R'] - directional['Peak_R']
     max_dd_r = directional['Drawdown_R'].min()
-    
-    # Max drawdown percentage — computed TWO ways:
-    # 1) Relative to peak cumulative R (can exceed 100%, useful in R-space)
+    # Max drawdown percentage (relative to peak equity)
     peak_at_dd = directional.loc[directional['Drawdown_R'].idxmin(), 'Peak_R'] if max_dd_r < 0 else 0
-    max_dd_pct_of_peak = abs(max_dd_r / peak_at_dd * 100) if peak_at_dd > 0 else 0
-    # 2) Relative to starting account balance in R-units
-    #    1R = risk_percent% of account, so max_dd in account % = abs(max_dd_r) * risk_percent
-    #    This is the standard MaxDD% that traders expect (capped at 100% = account blown)
-    risk_pct = cfg.get('risk_percent', 1.0)
-    max_dd_pct = abs(max_dd_r) * risk_pct  # e.g. 595R * 1% = 595% of account
-    
-    # Also compute MaxDD% relative to peak equity as a "proper" drawdown metric
-    # (can never exceed 100% by definition: you can only lose what you have)
-    # For this we need a running equity that starts at a known balance, not 0R.
-    # Using cumulative R as if starting with 0, the "proper" peak-relative DD is:
-    if peak_at_dd > 0:
-        # trough = peak + drawdown => trough = peak_at_dd + max_dd_r
-        trough_at_dd = peak_at_dd + max_dd_r  # will be negative if DD > peak
-        # Proper DD% = (peak - trough) / peak * 100 = abs(max_dd_r) / peak_at_dd * 100
-        # But we also compute a "compounding-aware" version starting from 1R unit capital
-        # Simulate equity starting at 1.0 (1R capital), adding each trade's R-multiple
-        # This gives a more realistic drawdown picture
-        pass  # computed below after we have the compounding equity
-    
-    # ── Compounding equity simulation ──
-    # Simulate with a starting capital of 1R (1 unit of risk).
-    # Each trade risks risk_pct% of current equity.
-    # This gives realistic drawdown % that can never exceed 100%.
-    equity_compound = [1.0]  # Start with 1R capital
-    for r in r_multiples:
-        # P&L for this trade = r * risk_pct% of current equity
-        pnl = r * (risk_pct / 100.0) * equity_compound[-1]
-        equity_compound.append(equity_compound[-1] + pnl)
-    equity_compound = np.array(equity_compound[1:])  # remove initial 1.0, align with trades
-    
-    # Compounding drawdown
-    peak_compound = np.maximum.accumulate(equity_compound)
-    dd_compound = equity_compound - peak_compound
-    max_dd_compound_r = dd_compound.min()
-    peak_at_dd_compound = peak_compound[np.argmin(dd_compound)] if max_dd_compound_r < 0 else 1.0
-    max_dd_pct_compound = abs(max_dd_compound_r / peak_at_dd_compound * 100) if peak_at_dd_compound > 0 else 0
-    final_equity_compound = equity_compound[-1]
-    account_return_pct = (final_equity_compound - 1.0) * 100  # Total return % on starting 1R capital
+    max_dd_pct = abs(max_dd_r / peak_at_dd * 100) if peak_at_dd > 0 else 0
     
     # Consecutive streaks
     wins = (directional['R_Multiple'] > 0).values
@@ -3952,32 +3988,18 @@ def compute_equity_curve(detections, cfg=None):
     # Expectancy
     expectancy = directional['R_Multiple'].mean()
     
-    total_trades = len(directional)
-    
-    # Sharpe ratio (annualised, using actual trade frequency from data)
-    r_std = directional['R_Multiple'].std()
-    r_mean = directional['R_Multiple'].mean()
-    if r_std > 0:
-        # Compute actual trades per year from the data date range
-        trades_per_year = 252 * 4  # fallback default
-        if 'DateTime' in directional.columns:
-            try:
-                dt_col = pd.to_datetime(directional['DateTime'], errors='coerce')
-                dt_col = dt_col.dropna()
-                if len(dt_col) >= 2:
-                    date_range_years = (dt_col.iloc[-1] - dt_col.iloc[0]).total_seconds() / (365.25 * 24 * 3600)
-                    if date_range_years > 0.01:  # at least ~4 days of data
-                        trades_per_year = total_trades / date_range_years
-            except Exception:
-                pass
-        sharpe = (r_mean / r_std) * np.sqrt(trades_per_year)
+    # Sharpe ratio (annualised)
+    if directional['R_Multiple'].std() > 0:
+        # Assume ~4 trades per day average across all TFs
+        trades_per_year = 252 * 4
+        sharpe = (directional['R_Multiple'].mean() / directional['R_Multiple'].std()) * np.sqrt(trades_per_year)
     else:
         sharpe = 0.0
     
     # Calmar ratio (annualised return / max drawdown)
-    # Use actual trades_per_year for annualization (consistent with Sharpe)
-    annual_return_r = directional['Cumulative_R'].iloc[-1] * (trades_per_year / max(total_trades, 1))
-    calmar = annual_return_r / abs(max_dd_r) if max_dd_r != 0 else 0.0
+    total_trades = len(directional)
+    annual_return = directional['Cumulative_R'].iloc[-1] * (252 * 4 / max(total_trades, 1))
+    calmar = annual_return / abs(max_dd_r) if max_dd_r != 0 else 0.0
     
     # Win/loss statistics
     n_wins = int((directional['R_Multiple'] > 0).sum())
@@ -3985,39 +4007,23 @@ def compute_equity_curve(detections, cfg=None):
     avg_win = directional.loc[directional['R_Multiple'] > 0, 'R_Multiple'].mean() if n_wins > 0 else 0
     avg_loss = directional.loc[directional['R_Multiple'] < 0, 'R_Multiple'].mean() if n_losses > 0 else 0
     
-    # ── Account currency conversion ──
-    account_balance = cfg.get('account_balance', 100000)
-    risk_per_trade = account_balance * (risk_pct / 100.0)  # $ amount risked per trade = 1R
-    final_pnl_currency = directional['Cumulative_R'].iloc[-1] * risk_per_trade
-    max_dd_currency = abs(max_dd_r) * risk_per_trade
-    
     return {
         'total_trades': total_trades,
         'n_wins': n_wins,
         'n_losses': n_losses,
         'final_equity_r': round(directional['Cumulative_R'].iloc[-1], 2),
         'max_dd_r': round(max_dd_r, 2),
-        'max_dd_pct': round(max_dd_pct, 1),          # % of starting account balance (abs(max_dd_r) * risk_pct)
-        'max_dd_pct_of_peak': round(max_dd_pct_of_peak, 1),  # % of peak cumulative R (can exceed 100%)
-        'max_dd_pct_compound': round(max_dd_pct_compound, 1), # % drawdown from compounding equity
-        'account_return_pct': round(account_return_pct, 1),   # Total return % on 1R capital (compounded)
+        'max_dd_pct': round(max_dd_pct, 1),
         'max_consec_wins': max_consec_wins,
         'max_consec_losses': max_consec_losses,
         'profit_factor': round(profit_factor, 2),
         'expectancy': round(expectancy, 3),
         'sharpe': round(sharpe, 2),
-        'trades_per_year': round(trades_per_year, 0),  # Actual computed value
         'calmar': round(calmar, 2),
         'avg_win_r': round(avg_win, 3) if avg_win else 0,
         'avg_loss_r': round(avg_loss, 3) if avg_loss else 0,
         'gross_profit_r': round(gross_profit, 2),
         'gross_loss_r': round(gross_loss, 2),
-        # Account currency equivalents
-        'account_balance': account_balance,
-        'risk_percent': risk_pct,
-        'risk_per_trade': round(risk_per_trade, 2),
-        'final_pnl_currency': round(final_pnl_currency, 2),
-        'max_dd_currency': round(max_dd_currency, 2),
         'equity_curve': directional['Cumulative_R'].tolist(),
         'drawdown_curve': directional['Drawdown_R'].tolist(),
     }
@@ -4192,7 +4198,8 @@ def run_scanner(cfg=None):
     if len(cfg.get('watchlist', [])) > 1:
         log_message(f"  Watchlist: {watchlist_display} (live scanner: {symbol})", cfg)
     log_message(f"Active timeframes: {C('yellow', ', '.join(active_tfs))}", cfg)
-    log_message(f"Timestamps: Local time ({datetime.now().strftime('%Z')}, auto-detected broker UTC+{cfg.get('broker_utc_offset', 2)})", cfg)
+    current_offset = get_broker_offset_for_date(datetime.now(), cfg)
+    log_message(f"Timestamps: Local time ({datetime.now().strftime('%Z')}), broker GMT+{current_offset} (base {cfg.get('broker_utc_offset', 2)}, DST rule: {cfg.get('broker_dst_rule', 'us')})", cfg)
     sl_str = f"{cfg['sl_multiplier']}x ATR"
     log_message(f"SL: {C('red', sl_str)} | TP R:R = 1:{cfg['tp_multiplier']/cfg['sl_multiplier']:.1f}", cfg)
 
@@ -4247,15 +4254,16 @@ def run_scanner(cfg=None):
     if not connect_mt5(cfg):
         return
 
-    # Auto-detect broker UTC offset (handles DST changes automatically)
-    configured_offset = cfg.get('broker_utc_offset', 2)
+    # Auto-detect broker UTC offset (validates against DST calendar)
     detected_offset = auto_detect_broker_offset(cfg)
-    if detected_offset != configured_offset:
-        log_message(
-            C('yellow', f"Broker UTC offset: auto-detected {detected_offset} (config says {configured_offset}, using detected)"), cfg)
-        cfg['broker_utc_offset'] = detected_offset
+    expected_offset = get_broker_offset_for_date(datetime.now(), cfg)
+    if detected_offset == expected_offset:
+        log_message(f"Broker UTC offset: {detected_offset} (confirmed, matches DST calendar)", cfg)
     else:
-        log_message(f"Broker UTC offset: {detected_offset} (confirmed)", cfg)
+        log_message(
+            C('yellow', f"Broker UTC offset MISMATCH: auto-detected {detected_offset}, "
+             f"expected {expected_offset} for today's date. "
+             f"Check broker_utc_offset ({cfg.get('broker_utc_offset', 2)}) and broker_dst_rule ({cfg.get('broker_dst_rule', 'us')})"), cfg)
 
     # Track last candle time per timeframe
     last_candle_time = {tf: None for tf in active_tfs}
@@ -4701,6 +4709,7 @@ def run_full_backtest(args, cfg=None):
         combined_stats = {'symbol': symbol, 'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                           'backtest_range': f"{args.date_from} to {args.date_to}",
                           'broker_utc_offset': cfg.get('broker_utc_offset', 2),
+                          'broker_dst_rule': cfg.get('broker_dst_rule', 'us'),
                           'timeframes': {}}
         for tf_label, dets in all_results.items():
             if not dets: continue
@@ -4892,7 +4901,11 @@ Examples:
     p.add_argument("--tweezer-tolerance",         type=float, default=cfg['tweezer_tolerance_pips'])
     p.add_argument("--engulf-tolerance-pips",     type=float, default=cfg['engulf_tolerance_pips'])
     p.add_argument("--trend-lookback",            type=int,   default=cfg['trend_lookback'])
-    p.add_argument("--broker-utc-offset",         type=int,   default=cfg['broker_utc_offset'])
+    p.add_argument("--broker-utc-offset",         type=int,   default=cfg['broker_utc_offset'],
+                    help="Broker standard (winter) UTC offset (default: 2 for NY-close brokers)")
+    p.add_argument("--broker-dst-rule",           type=str,   default=cfg.get('broker_dst_rule', 'us'),
+                    choices=['us', 'eu', 'none'],
+                    help="DST rule: 'us' (2nd Sun Mar→1st Sun Nov), 'eu', or 'none' (default: us)")
 
     # Filters
     p.add_argument("--deduplicate",    dest="deduplicate_signals", action="store_true")
@@ -4957,6 +4970,7 @@ def main():
         'tweezer_tolerance': 'tweezer_tolerance_pips',
         'engulf_tolerance_pips': 'engulf_tolerance_pips',
         'trend_lookback': 'trend_lookback', 'broker_utc_offset': 'broker_utc_offset',
+        'broker_dst_rule': 'broker_dst_rule',
         'deduplicate_signals': 'deduplicate_signals', 'verify_entry': 'verify_entry',
         'volume_filter': 'volume_filter', 'volume_ma_period': 'volume_ma_period',
         'volume_threshold': 'volume_threshold',
