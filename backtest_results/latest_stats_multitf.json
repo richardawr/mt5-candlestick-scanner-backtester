@@ -1,6 +1,6 @@
 {
   "symbol": "EURUSD",
-  "generated_at": "2026-05-29 21:07:01",
+  "generated_at": "2026-05-29 23:11:31",
   "backtest_range": "2025-08-01 to 2026-05-28",
   "broker_utc_offset": 2,
   "broker_dst_rule": "us",
@@ -2615,108 +2615,108 @@
     },
     "H4": {
       "overall": {
-        "win_rate": 50.4,
+        "win_rate": 51.9,
         "total_signals": 642,
-        "avg_max_r": 0.36,
-        "sl_hit_pct": 31.3,
-        "tp_hit_pct": 35.5,
-        "avg_mae_r": 0.637,
-        "avg_mfe_r": 0.681,
-        "avg_bars_to_tp": 6.4,
-        "avg_exit_r": 0.025,
+        "avg_max_r": 0.5,
+        "sl_hit_pct": 40.2,
+        "tp_hit_pct": 45.0,
+        "avg_mae_r": 0.747,
+        "avg_mfe_r": 0.824,
+        "avg_bars_to_tp": 4.4,
+        "avg_exit_r": 0.046,
         "be_move_pct": 0.0
       },
       "patterns": {
         "TheStrat 2-1-2": {
-          "win_rate": 52.0,
+          "win_rate": 62.0,
           "total": 57,
-          "avg_max_r": 0.4,
-          "sl_hit_pct": 35.1,
-          "tp_hit_pct": 36.8
+          "avg_max_r": 0.63,
+          "sl_hit_pct": 33.3,
+          "tp_hit_pct": 52.6
         },
         "TheStrat 2-2": {
-          "win_rate": 45.6,
+          "win_rate": 47.9,
           "total": 334,
-          "avg_max_r": 0.29,
-          "sl_hit_pct": 33.8,
-          "tp_hit_pct": 29.6
+          "avg_max_r": 0.45,
+          "sl_hit_pct": 43.1,
+          "tp_hit_pct": 40.4
         },
         "Bearish Harami": {
-          "win_rate": 64.7,
+          "win_rate": 58.8,
           "total": 17,
           "avg_max_r": 0.65,
-          "sl_hit_pct": 11.8,
+          "sl_hit_pct": 35.3,
           "tp_hit_pct": 58.8
         },
         "Tweezer Tops": {
           "win_rate": 41.7,
           "total": 17,
           "avg_max_r": 0.24,
-          "sl_hit_pct": 35.3,
+          "sl_hit_pct": 41.2,
           "tp_hit_pct": 23.5
         },
         "TheStrat 3-1-2": {
           "win_rate": 55.6,
           "total": 18,
-          "avg_max_r": 0.33,
-          "sl_hit_pct": 22.2,
-          "tp_hit_pct": 33.3
-        },
-        "Bearish Engulfing": {
-          "win_rate": 52.6,
-          "total": 20,
-          "avg_max_r": 0.45,
-          "sl_hit_pct": 15.0,
-          "tp_hit_pct": 45.0
-        },
-        "Bullish Engulfing": {
-          "win_rate": 66.7,
-          "total": 31,
-          "avg_max_r": 0.45,
-          "sl_hit_pct": 22.6,
-          "tp_hit_pct": 45.2
-        },
-        "TheStrat 1-2-2 Rev": {
-          "win_rate": 66.7,
-          "total": 18,
-          "avg_max_r": 0.5,
-          "sl_hit_pct": 33.3,
-          "tp_hit_pct": 50.0
-        },
-        "Three Outside Up": {
-          "win_rate": 50.0,
-          "total": 16,
-          "avg_max_r": 0.31,
-          "sl_hit_pct": 37.5,
-          "tp_hit_pct": 31.2
-        },
-        "TheStrat 1-3 Rev": {
-          "win_rate": 64.5,
-          "total": 31,
-          "avg_max_r": 0.45,
-          "sl_hit_pct": 19.4,
-          "tp_hit_pct": 45.2
-        },
-        "Bullish Harami": {
-          "win_rate": 50.0,
-          "total": 18,
           "avg_max_r": 0.56,
           "sl_hit_pct": 38.9,
           "tp_hit_pct": 50.0
         },
+        "Bearish Engulfing": {
+          "win_rate": 57.9,
+          "total": 20,
+          "avg_max_r": 0.6,
+          "sl_hit_pct": 30.0,
+          "tp_hit_pct": 55.0
+        },
+        "Bullish Engulfing": {
+          "win_rate": 63.3,
+          "total": 31,
+          "avg_max_r": 0.52,
+          "sl_hit_pct": 32.3,
+          "tp_hit_pct": 51.6
+        },
+        "TheStrat 1-2-2 Rev": {
+          "win_rate": 61.1,
+          "total": 18,
+          "avg_max_r": 0.67,
+          "sl_hit_pct": 38.9,
+          "tp_hit_pct": 61.1
+        },
+        "Three Outside Up": {
+          "win_rate": 50.0,
+          "total": 16,
+          "avg_max_r": 0.44,
+          "sl_hit_pct": 43.8,
+          "tp_hit_pct": 43.8
+        },
+        "TheStrat 1-3 Rev": {
+          "win_rate": 61.3,
+          "total": 31,
+          "avg_max_r": 0.61,
+          "sl_hit_pct": 32.3,
+          "tp_hit_pct": 58.1
+        },
+        "Bullish Harami": {
+          "win_rate": 44.4,
+          "total": 18,
+          "avg_max_r": 0.56,
+          "sl_hit_pct": 55.6,
+          "tp_hit_pct": 44.4
+        },
         "Near Bearish Engulfing": {
-          "win_rate": 47.1,
+          "win_rate": 52.9,
           "total": 17,
-          "avg_max_r": 0.47,
+          "avg_max_r": 0.53,
           "sl_hit_pct": 41.2,
-          "tp_hit_pct": 47.1
+          "tp_hit_pct": 52.9
         },
         "Tweezer Bottoms": {
-          "win_rate": 81.8,
+          "win_rate": 72.7,
           "total": 13,
           "avg_max_r": 0.69,
-          "sl_hit_pct": 7.7,
-          "tp_hit_pct": 69.2
+          "sl_hit_pct": 15.4,
+          "tp_hit_pct": 61.5
         },
         "Three Inside Up": {
           "win_rate": 0.0,
@@ -2726,11 +2726,11 @@
           "tp_hit_pct": 0.0
         },
         "Three Outside Down": {
-          "win_rate": 35.7,
+          "win_rate": 42.9,
           "total": 16,
-          "avg_max_r": 0.25,
+          "avg_max_r": 0.38,
           "sl_hit_pct": 43.8,
-          "tp_hit_pct": 25.0
+          "tp_hit_pct": 37.5
         },
         "Marubozu (Bullish)": {
           "win_rate": 100.0,
@@ -2740,11 +2740,11 @@
           "tp_hit_pct": 100.0
         },
         "Gravestone Doji": {
-          "win_rate": 33.3,
+          "win_rate": 0.0,
           "total": 4,
-          "avg_max_r": 0.25,
-          "sl_hit_pct": 25.0,
-          "tp_hit_pct": 25.0
+          "avg_max_r": 0.0,
+          "sl_hit_pct": 75.0,
+          "tp_hit_pct": 0.0
         },
         "Morning Star": {
           "win_rate": 0.0,
@@ -2764,7 +2764,7 @@
           "win_rate": 0.0,
           "total": 2,
           "avg_max_r": 0.0,
-          "sl_hit_pct": 50.0,
+          "sl_hit_pct": 100.0,
           "tp_hit_pct": 0.0
         },
         "Three Black Crows": {
@@ -2775,11 +2775,11 @@
           "tp_hit_pct": 100.0
         },
         "Hanging Man": {
-          "win_rate": 0.0,
+          "win_rate": 100.0,
           "total": 1,
-          "avg_max_r": 0.0,
+          "avg_max_r": 1.0,
           "sl_hit_pct": 0.0,
-          "tp_hit_pct": 0.0
+          "tp_hit_pct": 100.0
         },
         "Three Inside Down": {
           "win_rate": 100.0,
@@ -2805,7 +2805,7 @@
         "Bearish Doji Star": {
           "win_rate": 100.0,
           "total": 1,
-          "avg_max_r": 1.0,
+          "avg_max_r": 2.0,
           "sl_hit_pct": 0.0,
           "tp_hit_pct": 100.0
         },
@@ -2819,46 +2819,46 @@
       },
       "sessions": {
         "Pacific": {
-          "win_rate": 57.6,
+          "win_rate": 56.5,
           "signals": 108,
-          "avg_max_r": 0.38
+          "avg_max_r": 0.51
         },
         "Asia": {
-          "win_rate": 53.6,
+          "win_rate": 57.3,
           "signals": 220,
-          "avg_max_r": 0.44
+          "avg_max_r": 0.6
         },
         "London/NY Overlap": {
-          "win_rate": 44.6,
+          "win_rate": 48.5,
           "signals": 112,
-          "avg_max_r": 0.24
+          "avg_max_r": 0.4
         },
         "London Morning": {
-          "win_rate": 47.6,
+          "win_rate": 44.8,
           "signals": 106,
-          "avg_max_r": 0.34
+          "avg_max_r": 0.47
         },
         "NY Afternoon": {
-          "win_rate": 45.2,
+          "win_rate": 46.4,
           "signals": 96,
-          "avg_max_r": 0.31
+          "avg_max_r": 0.4
         }
       },
       "cross": {
         "TheStrat 2-1-2|Pacific": {
           "win_rate": 65.0,
           "signals": 25,
-          "avg_max_r": 0.44
+          "avg_max_r": 0.52
         },
         "TheStrat 2-1-2|Asia": {
-          "win_rate": 47.1,
+          "win_rate": 70.6,
           "signals": 18,
-          "avg_max_r": 0.28
+          "avg_max_r": 0.72
         },
         "TheStrat 2-1-2|London/NY Overlap": {
-          "win_rate": 33.3,
+          "win_rate": 50.0,
           "signals": 6,
-          "avg_max_r": 0.5
+          "avg_max_r": 0.83
         },
         "TheStrat 2-1-2|NY Afternoon": {
           "win_rate": 40.0,
@@ -2866,29 +2866,29 @@
           "avg_max_r": 0.33
         },
         "TheStrat 2-2|Pacific": {
-          "win_rate": 52.6,
+          "win_rate": 47.4,
           "signals": 45,
-          "avg_max_r": 0.29
+          "avg_max_r": 0.44
         },
         "TheStrat 2-2|Asia": {
-          "win_rate": 49.5,
+          "win_rate": 55.4,
           "signals": 106,
-          "avg_max_r": 0.4
+          "avg_max_r": 0.57
         },
         "TheStrat 2-2|London/NY Overlap": {
-          "win_rate": 43.8,
+          "win_rate": 45.3,
           "signals": 74,
-          "avg_max_r": 0.2
+          "avg_max_r": 0.34
         },
         "TheStrat 2-2|London Morning": {
-          "win_rate": 40.0,
+          "win_rate": 38.3,
           "signals": 61,
-          "avg_max_r": 0.25
+          "avg_max_r": 0.41
         },
         "TheStrat 2-2|NY Afternoon": {
-          "win_rate": 40.5,
+          "win_rate": 47.6,
           "signals": 48,
-          "avg_max_r": 0.27
+          "avg_max_r": 0.42
         },
         "Bearish Harami|Pacific": {
           "win_rate": 66.7,
@@ -2901,7 +2901,7 @@
           "avg_max_r": 1.0
         },
         "Bearish Harami|London Morning": {
-          "win_rate": 100.0,
+          "win_rate": 75.0,
           "signals": 4,
           "avg_max_r": 1.0
         },
@@ -2921,19 +2921,19 @@
           "avg_max_r": 0.14
         },
         "Tweezer Tops|London/NY Overlap": {
-          "win_rate": 0.0,
+          "win_rate": 50.0,
           "signals": 3,
-          "avg_max_r": 0.0
+          "avg_max_r": 0.33
         },
         "TheStrat 3-1-2|Pacific": {
-          "win_rate": 33.3,
+          "win_rate": 50.0,
           "signals": 6,
-          "avg_max_r": 0.33
+          "avg_max_r": 0.67
         },
         "TheStrat 3-1-2|Asia": {
           "win_rate": 80.0,
           "signals": 5,
-          "avg_max_r": 0.4
+          "avg_max_r": 0.8
         },
         "TheStrat 3-1-2|London/NY Overlap": {
           "win_rate": 60.0,
@@ -2943,7 +2943,7 @@
         "Bearish Engulfing|Asia": {
           "win_rate": 60.0,
           "signals": 15,
-          "avg_max_r": 0.53
+          "avg_max_r": 0.67
         },
         "Bearish Engulfing|NY Afternoon": {
           "win_rate": 50.0,
@@ -2951,19 +2951,19 @@
           "avg_max_r": 0.33
         },
         "Bullish Engulfing|Asia": {
-          "win_rate": 60.0,
+          "win_rate": 53.3,
           "signals": 15,
           "avg_max_r": 0.53
         },
         "Bullish Engulfing|London/NY Overlap": {
           "win_rate": 75.0,
           "signals": 4,
-          "avg_max_r": 0.25
+          "avg_max_r": 0.5
         },
         "Bullish Engulfing|London Morning": {
           "win_rate": 100.0,
           "signals": 6,
-          "avg_max_r": 0.5
+          "avg_max_r": 0.67
         },
         "Bullish Engulfing|NY Afternoon": {
           "win_rate": 25.0,
@@ -2971,9 +2971,9 @@
           "avg_max_r": 0.2
         },
         "TheStrat 1-2-2 Rev|Asia": {
-          "win_rate": 58.3,
+          "win_rate": 66.7,
           "signals": 12,
-          "avg_max_r": 0.5
+          "avg_max_r": 0.75
         },
         "Three Outside Up|Asia": {
           "win_rate": 50.0,
@@ -2983,30 +2983,30 @@
         "Three Outside Up|London/NY Overlap": {
           "win_rate": 66.7,
           "signals": 3,
-          "avg_max_r": 0.33
+          "avg_max_r": 0.67
         },
         "Three Outside Up|London Morning": {
-          "win_rate": 20.0,
+          "win_rate": 40.0,
           "signals": 5,
-          "avg_max_r": 0.0
+          "avg_max_r": 0.2
         },
         "TheStrat 1-3 Rev|Pacific": {
-          "win_rate": 71.4,
+          "win_rate": 64.3,
           "signals": 14,
-          "avg_max_r": 0.5
+          "avg_max_r": 0.64
         },
         "TheStrat 1-3 Rev|Asia": {
           "win_rate": 50.0,
           "signals": 12,
-          "avg_max_r": 0.42
+          "avg_max_r": 0.5
         },
         "TheStrat 1-3 Rev|London/NY Overlap": {
           "win_rate": 66.7,
           "signals": 3,
-          "avg_max_r": 0.33
+          "avg_max_r": 0.67
         },
         "Bullish Harami|Asia": {
-          "win_rate": 50.0,
+          "win_rate": 33.3,
           "signals": 6,
           "avg_max_r": 0.67
         },
@@ -3026,9 +3026,9 @@
           "avg_max_r": 0.4
         },
         "Near Bearish Engulfing|NY Afternoon": {
-          "win_rate": 0.0,
+          "win_rate": 25.0,
           "signals": 4,
-          "avg_max_r": 0.0
+          "avg_max_r": 0.25
         },
         "Tweezer Bottoms|Pacific": {
           "win_rate": 100.0,
@@ -3036,7 +3036,7 @@
           "avg_max_r": 0.5
         },
         "Tweezer Bottoms|Asia": {
-          "win_rate": 100.0,
+          "win_rate": 80.0,
           "signals": 5,
           "avg_max_r": 1.0
         },
@@ -3046,58 +3046,58 @@
           "avg_max_r": 0.67
         },
         "Three Outside Down|London Morning": {
-          "win_rate": 41.7,
+          "win_rate": 50.0,
           "signals": 12,
-          "avg_max_r": 0.33
+          "avg_max_r": 0.5
         }
       },
       "confluence": {
         "1": {
-          "win_rate": 0.0,
-          "signals": 6,
-          "avg_max_r": 0.0
+          "win_rate": 34.6,
+          "signals": 28,
+          "avg_max_r": 0.32
         },
         "2": {
-          "win_rate": 50.6,
-          "signals": 277,
-          "avg_max_r": 0.38
+          "win_rate": 54.5,
+          "signals": 320,
+          "avg_max_r": 0.53
         },
         "3": {
-          "win_rate": 53.0,
-          "signals": 263,
-          "avg_max_r": 0.38
+          "win_rate": 50.9,
+          "signals": 232,
+          "avg_max_r": 0.49
         },
         "4": {
-          "win_rate": 45.6,
-          "signals": 96,
-          "avg_max_r": 0.26
+          "win_rate": 50.8,
+          "signals": 62,
+          "avg_max_r": 0.42
         }
       },
       "equity": {
-        "final_equity_r": 15.87,
-        "max_dd_r": -32.04,
+        "final_equity_r": 29.34,
+        "max_dd_r": -25.93,
         "max_dd_pct": 0,
-        "max_consec_wins": 13,
+        "max_consec_wins": 17,
         "max_consec_losses": 15,
-        "profit_factor": 1.07,
-        "expectancy": 0.025,
-        "sharpe": 0.93,
-        "calmar": 0.78,
-        "avg_win_r": 0.844,
-        "avg_loss_r": -0.805
+        "profit_factor": 1.11,
+        "expectancy": 0.046,
+        "sharpe": 1.56,
+        "calmar": 1.78,
+        "avg_win_r": 0.962,
+        "avg_loss_r": -0.936
       }
     },
     "D1": {
       "overall": {
-        "win_rate": 48.3,
+        "win_rate": 47.2,
         "total_signals": 188,
-        "avg_max_r": 0.26,
-        "sl_hit_pct": 36.7,
-        "tp_hit_pct": 25.0,
-        "avg_mae_r": 0.716,
-        "avg_mfe_r": 0.635,
-        "avg_bars_to_tp": 8.8,
-        "avg_exit_r": -0.092,
+        "avg_max_r": 0.46,
+        "sl_hit_pct": 49.5,
+        "tp_hit_pct": 44.1,
+        "avg_mae_r": 0.893,
+        "avg_mfe_r": 0.789,
+        "avg_bars_to_tp": 3.6,
+        "avg_exit_r": -0.055,
         "be_move_pct": 0.0
       },
       "patterns": {
@@ -3116,81 +3116,81 @@
           "tp_hit_pct": 33.3
         },
         "TheStrat 1-2-2 Rev": {
-          "win_rate": 66.7,
+          "win_rate": 33.3,
           "total": 6,
-          "avg_max_r": 0.33,
-          "sl_hit_pct": 16.7,
-          "tp_hit_pct": 33.3
+          "avg_max_r": 0.17,
+          "sl_hit_pct": 66.7,
+          "tp_hit_pct": 16.7
         },
         "TheStrat 2-2": {
-          "win_rate": 49.0,
+          "win_rate": 40.0,
           "total": 106,
-          "avg_max_r": 0.26,
-          "sl_hit_pct": 34.9,
-          "tp_hit_pct": 26.4
+          "avg_max_r": 0.42,
+          "sl_hit_pct": 54.7,
+          "tp_hit_pct": 38.7
         },
         "Bearish Engulfing": {
           "win_rate": 66.7,
           "total": 3,
           "avg_max_r": 0.33,
-          "sl_hit_pct": 0.0,
+          "sl_hit_pct": 33.3,
           "tp_hit_pct": 33.3
         },
         "TheStrat 2-1-2": {
-          "win_rate": 50.0,
+          "win_rate": 66.7,
           "total": 18,
-          "avg_max_r": 0.22,
-          "sl_hit_pct": 44.4,
-          "tp_hit_pct": 22.2
+          "avg_max_r": 0.67,
+          "sl_hit_pct": 33.3,
+          "tp_hit_pct": 66.7
         },
         "Tweezer Tops": {
-          "win_rate": 33.3,
+          "win_rate": 66.7,
           "total": 6,
-          "avg_max_r": 0.33,
+          "avg_max_r": 0.67,
           "sl_hit_pct": 50.0,
-          "tp_hit_pct": 33.3
+          "tp_hit_pct": 66.7
         },
         "Bullish Engulfing": {
-          "win_rate": 25.0,
+          "win_rate": 62.5,
           "total": 10,
-          "avg_max_r": 0.1,
-          "sl_hit_pct": 50.0,
-          "tp_hit_pct": 10.0
+          "avg_max_r": 0.5,
+          "sl_hit_pct": 30.0,
+          "tp_hit_pct": 50.0
         },
         "Bearish Harami": {
-          "win_rate": 66.7,
+          "win_rate": 55.6,
           "total": 9,
-          "avg_max_r": 0.33,
-          "sl_hit_pct": 33.3,
-          "tp_hit_pct": 22.2
+          "avg_max_r": 0.67,
+          "sl_hit_pct": 44.4,
+          "tp_hit_pct": 55.6
         },
         "Three Outside Up": {
-          "win_rate": 25.0,
+          "win_rate": 50.0,
           "total": 4,
-          "avg_max_r": 0.25,
+          "avg_max_r": 0.5,
           "sl_hit_pct": 50.0,
-          "tp_hit_pct": 25.0
+          "tp_hit_pct": 50.0
         },
         "Bullish Harami": {
-          "win_rate": 25.0,
+          "win_rate": 75.0,
           "total": 4,
-          "avg_max_r": 0.25,
-          "sl_hit_pct": 50.0,
-          "tp_hit_pct": 25.0
+          "avg_max_r": 0.75,
+          "sl_hit_pct": 25.0,
+          "tp_hit_pct": 75.0
         },
         "Piercing Line": {
-          "win_rate": 0.0,
+          "win_rate": 100.0,
           "total": 1,
-          "avg_max_r": 0.0,
+          "avg_max_r": 1.0,
           "sl_hit_pct": 0.0,
-          "tp_hit_pct": 0.0
+          "tp_hit_pct": 100.0
         },
         "Hammer": {
-          "win_rate": 0.0,
+          "win_rate": 100.0,
           "total": 1,
-          "avg_max_r": 0.0,
-          "sl_hit_pct": 100.0,
-          "tp_hit_pct": 0.0
+          "avg_max_r": 1.0,
+          "sl_hit_pct": 0.0,
+          "tp_hit_pct": 100.0
         },
         "Near Bearish Engulfing": {
           "win_rate": 0.0,
@@ -3200,25 +3200,25 @@
           "tp_hit_pct": 0.0
         },
         "TheStrat 1-3 Rev": {
-          "win_rate": 66.7,
+          "win_rate": 50.0,
           "total": 6,
-          "avg_max_r": 0.33,
-          "sl_hit_pct": 33.3,
-          "tp_hit_pct": 33.3
+          "avg_max_r": 0.5,
+          "sl_hit_pct": 50.0,
+          "tp_hit_pct": 50.0
         },
         "Three Outside Down": {
-          "win_rate": 100.0,
+          "win_rate": 0.0,
           "total": 1,
-          "avg_max_r": 1.0,
-          "sl_hit_pct": 0.0,
-          "tp_hit_pct": 100.0
+          "avg_max_r": 0.0,
+          "sl_hit_pct": 100.0,
+          "tp_hit_pct": 0.0
         },
         "Near Bullish Engulfing": {
           "win_rate": 33.3,
           "total": 3,
-          "avg_max_r": 0.0,
-          "sl_hit_pct": 33.3,
-          "tp_hit_pct": 0.0
+          "avg_max_r": 0.33,
+          "sl_hit_pct": 66.7,
+          "tp_hit_pct": 33.3
         },
         "Evening Star": {
           "win_rate": 0.0,
@@ -3228,11 +3228,11 @@
           "tp_hit_pct": 0.0
         },
         "Tweezer Bottoms": {
-          "win_rate": 100.0,
+          "win_rate": 50.0,
           "total": 2,
           "avg_max_r": 0.5,
-          "sl_hit_pct": 0.0,
-          "tp_hit_pct": 50.0
+          "sl_hit_pct": 50.0,
+          "tp_hit_pct": 100.0
         },
         "Shooting Star": {
           "win_rate": 100.0,
@@ -3244,9 +3244,9 @@
       },
       "sessions": {
         "Pacific": {
-          "win_rate": 48.3,
+          "win_rate": 47.2,
           "signals": 188,
-          "avg_max_r": 0.26
+          "avg_max_r": 0.46
         }
       },
       "cross": {
@@ -3256,14 +3256,14 @@
           "avg_max_r": 0.33
         },
         "TheStrat 1-2-2 Rev|Pacific": {
-          "win_rate": 66.7,
+          "win_rate": 33.3,
           "signals": 6,
-          "avg_max_r": 0.33
+          "avg_max_r": 0.17
         },
         "TheStrat 2-2|Pacific": {
-          "win_rate": 49.0,
+          "win_rate": 40.0,
           "signals": 106,
-          "avg_max_r": 0.26
+          "avg_max_r": 0.42
         },
         "Bearish Engulfing|Pacific": {
           "win_rate": 66.7,
@@ -3271,75 +3271,75 @@
           "avg_max_r": 0.33
         },
         "TheStrat 2-1-2|Pacific": {
-          "win_rate": 50.0,
+          "win_rate": 66.7,
           "signals": 18,
-          "avg_max_r": 0.22
+          "avg_max_r": 0.67
         },
         "Tweezer Tops|Pacific": {
-          "win_rate": 33.3,
+          "win_rate": 66.7,
           "signals": 6,
-          "avg_max_r": 0.33
+          "avg_max_r": 0.67
         },
         "Bullish Engulfing|Pacific": {
-          "win_rate": 25.0,
+          "win_rate": 62.5,
           "signals": 10,
-          "avg_max_r": 0.1
+          "avg_max_r": 0.5
         },
         "Bearish Harami|Pacific": {
-          "win_rate": 66.7,
+          "win_rate": 55.6,
           "signals": 9,
-          "avg_max_r": 0.33
+          "avg_max_r": 0.67
         },
         "Three Outside Up|Pacific": {
-          "win_rate": 25.0,
+          "win_rate": 50.0,
           "signals": 4,
-          "avg_max_r": 0.25
+          "avg_max_r": 0.5
         },
         "Bullish Harami|Pacific": {
-          "win_rate": 25.0,
+          "win_rate": 75.0,
           "signals": 4,
-          "avg_max_r": 0.25
+          "avg_max_r": 0.75
         },
         "TheStrat 1-3 Rev|Pacific": {
-          "win_rate": 66.7,
+          "win_rate": 50.0,
           "signals": 6,
-          "avg_max_r": 0.33
+          "avg_max_r": 0.5
         },
         "Near Bullish Engulfing|Pacific": {
           "win_rate": 33.3,
           "signals": 3,
-          "avg_max_r": 0.0
+          "avg_max_r": 0.33
         }
       },
       "confluence": {
         "1": {
-          "win_rate": 100.0,
-          "signals": 3,
-          "avg_max_r": 0.33
+          "win_rate": 68.4,
+          "signals": 41,
+          "avg_max_r": 0.66
         },
         "2": {
-          "win_rate": 45.4,
-          "signals": 105,
-          "avg_max_r": 0.23
+          "win_rate": 39.1,
+          "signals": 120,
+          "avg_max_r": 0.38
         },
         "3": {
-          "win_rate": 50.0,
-          "signals": 80,
-          "avg_max_r": 0.29
+          "win_rate": 51.9,
+          "signals": 27,
+          "avg_max_r": 0.52
         }
       },
       "equity": {
-        "final_equity_r": -17.32,
-        "max_dd_r": -25.99,
-        "max_dd_pct": 8664.3,
-        "max_consec_wins": 7,
+        "final_equity_r": -10.37,
+        "max_dd_r": -16.31,
+        "max_dd_pct": 3561.4,
+        "max_consec_wins": 5,
         "max_consec_losses": 7,
-        "profit_factor": 0.78,
-        "expectancy": -0.092,
-        "sharpe": -3.56,
-        "calmar": -3.57,
-        "avg_win_r": 0.7,
-        "avg_loss_r": -0.841
+        "profit_factor": 0.89,
+        "expectancy": -0.055,
+        "sharpe": -1.82,
+        "calmar": -3.41,
+        "avg_win_r": 0.971,
+        "avg_loss_r": -0.978
       }
     }
   }
